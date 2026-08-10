@@ -8,13 +8,17 @@ from .views import (
     TeacherProfileViewSet,
     RegisterView,
     LoginView,
+    MeView,
+    LogoutView,
 )
 
 urlpatterns = [
     # Authentification
     path('register/', RegisterView.as_view(), name='register'),
     path('login/', LoginView.as_view(), name='login'),
-    
+    path('logout/', LogoutView.as_view(), name='logout'),
+    path('me/', MeView.as_view(), name='me'),
+
     # Users
     path('users/', UserViewSet.as_view({
         'get': 'list',
@@ -26,7 +30,10 @@ urlpatterns = [
         'patch': 'partial_update',
         'delete': 'destroy'
     }), name='user-detail'),
-    
+    path('users/<int:pk>/change_password/', UserViewSet.as_view({
+        'post': 'change_password'
+    }), name='user-change-password'),
+
     # Wilayas
     path('wilayas/', WilayaViewSet.as_view({
         'get': 'list',

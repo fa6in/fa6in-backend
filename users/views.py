@@ -5,8 +5,9 @@ users/views.py
 from rest_framework import viewsets, permissions, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.authtoken.models import Token
-from rest_framework.authtoken.views import ObtainAuthToken
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
 from django.contrib.auth import authenticate
 
 from .models import User, Wilaya, StudentProfile, TeacherProfile
@@ -107,10 +108,15 @@ class TeacherProfileViewSet(viewsets.ModelViewSet):
         return qs.filter(user=user)
 
 
+def _jwt_pair_for(user):
+    refresh = RefreshToken.for_user(user)
+    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+
+
 class RegisterView(generics.CreateAPIView):
     """
     POST /api/auth/register/
-    Inscription publique (étudiant ou enseignant) + création automatique du Token.
+    Inscription publique (étudiant ou enseignant) + émission access/refresh JWT.
     """
     queryset = User.objects.all()
     serializer_class = UserRegistrationSerializer
@@ -120,24 +126,50 @@ class RegisterView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        token, _ = Token.objects.get_or_create(user=user)
         return Response(
-            {
-                'user': UserSerializer(user).data,
-                'token': token.key,
-            },
+            {**_jwt_pair_for(user), 'user': UserSerializer(user).data},
             status=status.HTTP_201_CREATED,
         )
 
 
-class LoginView(ObtainAuthToken):
+class LoginView(APIView):
     """
-    POST /api/auth/login/  {username, password} -> {token, user}
+    POST /api/auth/login/  {username, password} -> {access, refresh, user}
     """
+    permission_classes = [permissions.AllowAny]
 
-    def post(self, request, *args, **kwargs):
-        serializer = self.serializer_class(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data['user']
-        token, _ = Token.objects.get_or_create(user=user)
-        return Response({'token': token.key, 'user': UserSerializer(user).data})
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        user = authenticate(request, username=username, password=password)
+        if user is None:
+            return Response({'detail': "Identifiants invalides."}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response({**_jwt_pair_for(user), 'user': UserSerializer(user).data})
+
+
+class MeView(generics.RetrieveAPIView):
+    """
+    GET /api/auth/me/ -> infos de l'utilisateur authentifié.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+
+class LogoutView(APIView):
+    """
+    POST /api/auth/logout/  {refresh} -> blackliste le refresh token.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        refresh_token = request.data.get('refresh')
+        if not refresh_token:
+            return Response({'refresh': "Ce champ est requis."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            RefreshToken(refresh_token).blacklist()
+        except TokenError:
+            return Response({'detail': "Token invalide ou déjà expiré."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'detail': "Déconnexion réussie."}, status=status.HTTP_205_RESET_CONTENT)

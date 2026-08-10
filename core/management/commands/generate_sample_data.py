@@ -8,7 +8,7 @@ from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from curriculum.models import Subject, Unit, Lesson
-from assessment.models import Activity, StudentAttempt, StudentProgress
+from assessment.models import Chunk, StudentAttempt, StudentProgress
 from users.models import TeacherProfile, StudentProfile
 from analytics.models import LearningAnalytics, TeacherDashboard, SystemLog
 import random
@@ -90,7 +90,7 @@ class Command(BaseCommand):
         
         models_to_clear = [
             SystemLog, LearningAnalytics, TeacherDashboard,
-            StudentAttempt, StudentProgress, Activity,
+            StudentAttempt, StudentProgress, Chunk,
             Lesson, Unit, Subject,
             TeacherProfile, StudentProfile, User
         ]
@@ -712,25 +712,25 @@ class Command(BaseCommand):
         self.stdout.write('🎯 جاري إنشاء الأنشطة...')
         
         activities = []
-        activity_id = 1
+        Chunk_id = 1
         
         for unit in units:
             # إنشاء 4-8 أنشطة لكل وحدة
             num_activities = random.randint(4, 8)
             
             for i in range(num_activities):
-                activity_type = random.choice([
+                Chunk_type = random.choice([
                     'multiple_choice', 'true_false', 'fill_blank',
                     'matching', 'drag_drop', 'short_answer'
                 ])
                 
-                activity = Activity.objects.create(
+                Chunk = Chunk.objects.create(
                     unit=unit,
-                    title=f'نشاط {i+1}: {self.get_activity_title(activity_type, unit.title)}',
-                    activity_type=activity_type,
-                    question=self.generate_question(unit.subject.name, activity_type, i+1),
-                    options=self.generate_options(activity_type),
-                    correct_answer=self.generate_correct_answer(activity_type),
+                    title=f'نشاط {i+1}: {self.get_Chunk_title(Chunk_type, unit.title)}',
+                    Chunk_type=Chunk_type,
+                    question=self.generate_question(unit.subject.name, Chunk_type, i+1),
+                    options=self.generate_options(Chunk_type),
+                    correct_answer=self.generate_correct_answer(Chunk_type),
                     points=random.choice([5, 10, 15, 20]),
                     explanation=self.generate_explanation(unit.subject.name),
                     time_limit=random.choice([None, 60, 90, 120]),
@@ -738,13 +738,13 @@ class Command(BaseCommand):
                     is_active=True
                 )
                 
-                activities.append(activity)
-                activity_id += 1
+                activities.append(Chunk)
+                Chunk_id += 1
         
         self.stdout.write(f'   ✅ تم إنشاء {len(activities)} نشاط')
         return activities
 
-    def get_activity_title(self, activity_type, unit_title):
+    def get_Chunk_title(self, Chunk_type, unit_title):
         """الحصول على عنوان النشاط"""
         titles = {
             'multiple_choice': 'اختيار من متعدد',
@@ -754,9 +754,9 @@ class Command(BaseCommand):
             'drag_drop': 'سحب وإفلات',
             'short_answer': 'إجابة قصيرة'
         }
-        return titles.get(activity_type, 'نشاط تفاعلي')
+        return titles.get(Chunk_type, 'نشاط تفاعلي')
 
-    def generate_question(self, subject, activity_type, question_num):
+    def generate_question(self, subject, Chunk_type, question_num):
         """إنشاء سؤال"""
         math_questions = [
             'ما نتيجة جمع 5 + 3؟',
@@ -808,28 +808,28 @@ class Command(BaseCommand):
         subject_questions = questions_map.get(subject, default_questions)
         return random.choice(subject_questions)
 
-    def generate_options(self, activity_type):
+    def generate_options(self, Chunk_type):
         """إنشاء خيارات النشاط"""
-        if activity_type == 'multiple_choice':
+        if Chunk_type == 'multiple_choice':
             return ['الخيار الأول', 'الخيار الثاني', 'الخيار الثالث', 'الخيار الرابع']
-        elif activity_type == 'true_false':
+        elif Chunk_type == 'true_false':
             return ['صح', 'خطأ']
-        elif activity_type == 'matching':
+        elif Chunk_type == 'matching':
             return {'أ': '1', 'ب': '2', 'ج': '3'}
-        elif activity_type == 'drag_drop':
+        elif Chunk_type == 'drag_drop':
             return ['عنصر 1', 'عنصر 2', 'عنصر 3', 'عنصر 4']
         else:
             return []
 
-    def generate_correct_answer(self, activity_type):
+    def generate_correct_answer(self, Chunk_type):
         """إنشاء الإجابة الصحيحة"""
-        if activity_type in ['multiple_choice', 'true_false']:
-            return random.randint(0, 1 if activity_type == 'true_false' else 3)
-        elif activity_type == 'fill_blank':
+        if Chunk_type in ['multiple_choice', 'true_false']:
+            return random.randint(0, 1 if Chunk_type == 'true_false' else 3)
+        elif Chunk_type == 'fill_blank':
             return 'الجواب الصحيح'
-        elif activity_type == 'matching':
+        elif Chunk_type == 'matching':
             return {'أ': '1', 'ب': '2', 'ج': '3'}
-        elif activity_type == 'drag_drop':
+        elif Chunk_type == 'drag_drop':
             return ['عنصر 1', 'عنصر 2']
         else:  # short_answer
             return 'هذه هي الإجابة النموذجية'
@@ -884,19 +884,19 @@ class Command(BaseCommand):
                 completed_activities = []
                 total_score = 0
                 
-                for activity in attempted_activities:
+                for Chunk in attempted_activities:
                     # إنشاء 1-3 محاولات لكل نشاط
                     num_tries = random.randint(1, 3)
                     
                     for try_num in range(num_tries):
                         # نسبة النجاح: 60-90%
                         is_correct = random.random() < random.uniform(0.6, 0.9)
-                        score = activity.points if is_correct else 0
+                        score = Chunk.points if is_correct else 0
                         
                         attempt = StudentAttempt.objects.create(
                             student=student,
-                            activity=activity,
-                            answer=self.generate_student_answer(activity, is_correct),
+                            Chunk=Chunk,
+                            answer=self.generate_student_answer(Chunk, is_correct),
                             is_correct=is_correct,
                             score=score,
                             time_taken=random.randint(30, 300),
@@ -911,7 +911,7 @@ class Command(BaseCommand):
                         
                         # إذا كانت المحاولة صحيحة في المحاولة الأخيرة، نعتبر النشاط مكتملاً
                         if try_num == num_tries - 1 and is_correct:
-                            completed_activities.append(activity)
+                            completed_activities.append(Chunk)
                             total_score += score
                 
                 # تحديث تقدم الطالب
@@ -943,28 +943,28 @@ class Command(BaseCommand):
         self.stdout.write(f'   ✅ تم إنشاء {attempts_created} محاولة طالب')
         self.stdout.write(f'   ✅ تم إنشاء/تحديث {progress_created} تقدم طالب')
 
-    def generate_student_answer(self, activity, is_correct):
+    def generate_student_answer(self, Chunk, is_correct):
         """إنشاء إجابة الطالب"""
-        if activity.activity_type in ['multiple_choice', 'true_false']:
+        if Chunk.Chunk_type in ['multiple_choice', 'true_false']:
             if is_correct:
-                return activity.correct_answer
+                return Chunk.correct_answer
             else:
                 # إجابة خاطئة
-                if activity.activity_type == 'true_false':
-                    return 1 if activity.correct_answer == 0 else 0
+                if Chunk.Chunk_type == 'true_false':
+                    return 1 if Chunk.correct_answer == 0 else 0
                 else:
-                    wrong_answers = [i for i in range(len(activity.options)) if i != activity.correct_answer]
+                    wrong_answers = [i for i in range(len(Chunk.options)) if i != Chunk.correct_answer]
                     return random.choice(wrong_answers) if wrong_answers else 0
         
-        elif activity.activity_type == 'fill_blank':
+        elif Chunk.Chunk_type == 'fill_blank':
             if is_correct:
-                return activity.correct_answer
+                return Chunk.correct_answer
             else:
                 return 'إجابة خاطئة'
         
-        elif activity.activity_type == 'matching':
+        elif Chunk.Chunk_type == 'matching':
             if is_correct:
-                return activity.correct_answer
+                return Chunk.correct_answer
             else:
                 return {'أ': '2', 'ب': '3', 'ج': '1'}  # مطابقة خاطئة
         
@@ -1037,7 +1037,7 @@ class Command(BaseCommand):
                 # حساب معدل التفاعل
                 total_activities = sum(unit.activities.count() for unit in teacher_units)
                 total_attempts = StudentAttempt.objects.filter(
-                    activity__unit__in=teacher_units
+                    Chunk__unit__in=teacher_units
                 ).count()
                 
                 engagement_rate = (total_attempts / total_activities * 100) if total_activities > 0 else 0

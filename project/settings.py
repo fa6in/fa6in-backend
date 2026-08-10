@@ -11,7 +11,6 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from datetime import timedelta
-from datetime import timedelta
 import os
 from pathlib import Path
 
@@ -28,8 +27,8 @@ SECRET_KEY = 'django-insecure-174)sxx419n2spv8vsvav#j%7cv_!#9h(w%x2=pmc#wc35erpb
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
-
+# ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['192.168.0.192', 'localhost', '127.0.0.1']
 
 # Application definition
 
@@ -47,6 +46,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'rest_framework.authtoken',
+    'rest_framework_simplejwt.token_blacklist',
     'django_filters',
     'django_extensions',
     'django_rest_passwordreset',
@@ -195,7 +195,7 @@ ADMIN_REGISTRATION_ALLOWED_IPS = os.environ.get(
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
@@ -226,7 +226,15 @@ SPECTACULAR_SETTINGS = {
 
 # Custom User Model
 AUTH_USER_MODEL = 'users.User'
-# JWT Settings
+
+# JWT Settings (Revue de l'API - Partie 2 : décision définitive de passer à JWT)
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
 
 
 """

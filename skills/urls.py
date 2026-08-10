@@ -15,7 +15,13 @@ urlpatterns = [
         'patch': 'partial_update',
         'delete': 'destroy'
     }), name='skill-detail'),
-    
+    path('skills/<int:pk>/prerequisites/', SkillViewSet.as_view({
+        'get': 'prerequisites'
+    }), name='skill-prerequisites'),
+    path('skills/<int:pk>/publication_check/', SkillViewSet.as_view({
+        'get': 'publication_check'
+    }), name='skill-publication-check'),
+
     # Prerequisites
     path('prerequisites/', PrerequisiteViewSet.as_view({
         'get': 'list',

@@ -21,6 +21,9 @@ urlpatterns = [
         'get': 'list'
         # 'post': 'create'
     }), name='student-progress-list'),
+    path('progress/next_recommendation/', StudentProgressViewSet.as_view({
+        'get': 'next_recommendation'
+    }), name='student-progress-next-recommendation'),
     path('progress/<int:pk>/', StudentProgressViewSet.as_view({
         'get': 'retrieve',
         # 'put': 'update',
@@ -35,8 +38,6 @@ urlpatterns = [
     }), name='log-answer-list'),
     path('log-answers/<int:pk>/', LogAnswerViewSet.as_view({
         'get': 'retrieve',
-        'put': 'update',
-        'patch': 'partial_update',
-        'delete': 'destroy'
+        # append-only (Partie 4.3, Règle 8) : pas de put/patch/delete exposé
     }), name='log-answer-detail'),
 ]

@@ -26,6 +26,24 @@ class ChunkSerializer(serializers.ModelSerializer):
             )
         return attrs
 
+    def to_representation(self, instance):
+        """
+        Sécurité (Revue API, Problème 1) : un étudiant qui inspecte les
+        appels réseau ne doit jamais pouvoir lire correct_answer. Seuls
+        les enseignants/admins qui gèrent le contenu y ont accès.
+        """
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        from users.models import User
+        is_staff_role = bool(
+            user and user.is_authenticated
+            and user.role in (User.Role.TEACHER, User.Role.REGIONAL_ADMIN, User.Role.ADMIN)
+        )
+        if not is_staff_role:
+            data.pop('correct_answer', None)
+        return data
+
 
 class PrerequisiteSerializer(serializers.ModelSerializer):
     skill_code = serializers.CharField(source='skill.code', read_only=True)

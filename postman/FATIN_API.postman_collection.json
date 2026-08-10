@@ -1,0 +1,3758 @@
+{
+  "info": {
+    "_postman_id": "7f1d59a9-499b-4485-8d38-64876f4290ab",
+    "name": "FATIN APP - API REST (Decision Engine + JWT)",
+    "description": "Collection complete pour tester l'API FATIN APP.\n\nCouvre :\n- L'authentification JWT (register/login/refresh/verify/me/logout/change_password)\n- Le CRUD complet (users, curriculum, skills, chunks, assessment)\n- Les 3 endpoints intelligents du Decision Engine issus de la revue de l'API :\n    POST /api/students/{id}/answer/\n    GET  /api/students/{id}/next-action/\n  reproduisant le scenario 'Ahmed' (fractions 1/2 + 1/3) de bout en bout\n- Les verifications de securite (correct_answer masque, RBAC, append-only, tokens invalides)\n\nORDRE D'EXECUTION RECOMMANDE (via Collection Runner, ou dossier par dossier) :\n  0. Authentification -> 1. Utilisateurs -> 2. Curriculum -> 3. Skills/Chunks\n  -> 4. Scenario Ahmed -> 5. Assessment CRUD -> 6. Analytics -> 7. Securite\n\nLes requetes de creation (Register, Create Stage/Skill/Chunk, ...) capturent automatiquement les IDs et tokens necessaires dans les variables de collection (onglet 'Variables' de la collection) : aucune valeur a copier-coller manuellement.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Authentification (JWT)",
+      "description": "Flux d'authentification JWT complet (access 1h / refresh 7j, rotation + blacklist). Executer 'Register - Etudiant (Ahmed)' et 'Register - Enseignant' en premier : ils capturent automatiquement les tokens dans les variables de collection utilisees partout ailleurs. 'Logout' ne blackliste que le REFRESH token (l'access token reste valable jusqu'a son expiration de 1h independamment du logout) : les dossiers suivants continuent donc de fonctionner normalement meme apres avoir execute 'Logout' dans ce dossier.",
+      "item": [
+        {
+          "name": "Register - Etudiant (Ahmed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/register/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                ""
+              ]
+            },
+            "description": "Inscription publique d'un etudiant. Cree automatiquement un StudentProfile et renvoie directement access/refresh (plus besoin d'appeler /login/ ensuite).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"ahmed_ali\",\n  \"email\": \"ahmed.ali@example.com\",\n  \"password\": \"Passw0rd!2026\",\n  \"password_confirm\": \"Passw0rd!2026\",\n  \"first_name\": \"Ahmed\",\n  \"last_name\": \"Ali\",\n  \"role\": \"student\",\n  \"phone_number\": \"22200000001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const data = pm.response.json();",
+                  "pm.test('renvoie access + refresh + user', () => {",
+                  "    pm.expect(data).to.have.property('access');",
+                  "    pm.expect(data).to.have.property('refresh');",
+                  "    pm.expect(data.user).to.have.property('id');",
+                  "});",
+                  "if (data.access) {",
+                  "    pm.collectionVariables.set('student_access_token', data.access);",
+                  "    pm.collectionVariables.set('student_refresh_token', data.refresh);",
+                  "    pm.collectionVariables.set('student_id', data.user.id);",
+                  "}",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register - Enseignant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/register/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                ""
+              ]
+            },
+            "description": "Inscription d'un enseignant. Cree automatiquement un TeacherProfile.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"prof_sara\",\n  \"email\": \"sara.prof@example.com\",\n  \"password\": \"Passw0rd!2026\",\n  \"password_confirm\": \"Passw0rd!2026\",\n  \"first_name\": \"Sara\",\n  \"last_name\": \"Enseignante\",\n  \"role\": \"teacher\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const data = pm.response.json();",
+                  "if (data.access) {",
+                  "    pm.collectionVariables.set('teacher_access_token', data.access);",
+                  "    pm.collectionVariables.set('teacher_refresh_token', data.refresh);",
+                  "    pm.collectionVariables.set('teacher_id', data.user.id);",
+                  "}",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register - Etudiant B (pour tests RBAC)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/register/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                ""
+              ]
+            },
+            "description": "Deuxieme etudiant, utilise uniquement pour verifier qu'un etudiant ne peut pas agir pour un autre.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"fatima_student\",\n  \"email\": \"fatima@example.com\",\n  \"password\": \"Passw0rd!2026\",\n  \"password_confirm\": \"Passw0rd!2026\",\n  \"first_name\": \"Fatima\",\n  \"last_name\": \"B\",\n  \"role\": \"student\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const data = pm.response.json();",
+                  "if (data.access) {",
+                  "    pm.collectionVariables.set('student_b_access_token', data.access);",
+                  "    pm.collectionVariables.set('student_b_id', data.user.id);",
+                  "}",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Register - mots de passe differents",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/register/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                ""
+              ]
+            },
+            "description": "password != password_confirm -> doit renvoyer 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"bad_user\",\n  \"email\": \"bad@example.com\",\n  \"password\": \"Passw0rd!2026\",\n  \"password_confirm\": \"AUTRE_MOT_DE_PASSE\",\n  \"role\": \"student\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login - Etudiant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/login/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login",
+                ""
+              ]
+            },
+            "description": "POST {username, password} -> {access, refresh, user}.\nIMPORTANT: le header d'authentification a change depuis la revue API :\n  Avant (Token DRF) : Authorization: Token <key>\n  Maintenant (JWT)  : Authorization: Bearer <access>",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"ahmed_ali\",\n  \"password\": \"Passw0rd!2026\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.test('contient access/refresh/user', () => {",
+                  "    pm.expect(data).to.have.property('access');",
+                  "    pm.expect(data).to.have.property('refresh');",
+                  "    pm.expect(data).to.have.property('user');",
+                  "});",
+                  "pm.collectionVariables.set('student_access_token', data.access);",
+                  "pm.collectionVariables.set('student_refresh_token', data.refresh);",
+                  "pm.collectionVariables.set('student_id', data.user.id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Login - mauvais mot de passe",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/login/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login",
+                ""
+              ]
+            },
+            "description": "Identifiants invalides -> 401.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"ahmed_ali\",\n  \"password\": \"mauvais_mdp\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/token/refresh/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "token",
+                "refresh",
+                ""
+              ]
+            },
+            "description": "Echange le refresh token contre un nouvel access token.\nROTATE_REFRESH_TOKENS=True : un NOUVEAU refresh est aussi renvoye, et l'ancien devient invalide (BLACKLIST_AFTER_ROTATION=True).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{student_refresh_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('student_access_token', data.access);",
+                  "if (data.refresh) { pm.collectionVariables.set('student_refresh_token', data.refresh); }",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/token/verify/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "token",
+                "verify",
+                ""
+              ]
+            },
+            "description": "Verifie qu'un token (access ou refresh) est valide et non expire/blackliste. 200 = valide, 401 = invalide.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{student_access_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK si le token est valide', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me - Profil connecte",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me",
+                ""
+              ]
+            },
+            "description": "Retourne les infos de l'utilisateur authentifie via son access token.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('username correspond', () => pm.expect(pm.response.json().username).to.eql('ahmed_ali'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Changer mon mot de passe",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/users/{{student_id}}/change_password/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "users",
+                "{{student_id}}",
+                "change_password",
+                ""
+              ]
+            },
+            "description": "Un utilisateur ne peut changer que son propre mot de passe (verifie old_password).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"old_password\": \"Passw0rd!2026\",\n  \"new_password\": \"NouveauPassw0rd!2027\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout (blackliste le refresh token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/logout/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout",
+                ""
+              ]
+            },
+            "description": "Blackliste le refresh token fourni. Le champ 'refresh' est obligatoire.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{student_refresh_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('205 Reset Content', () => pm.response.to.have.status(205));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Refresh apres logout (token blackliste)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/token/refresh/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "token",
+                "refresh",
+                ""
+              ]
+            },
+            "description": "A executer APRES 'Logout' ci-dessus : le refresh token blackliste doit etre rejete avec 401.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{student_refresh_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('401 Unauthorized (token blackliste)', () => pm.response.to.have.status(401));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Utilisateurs & Profils",
+      "description": "CRUD des comptes utilisateurs, wilayas, profils etudiant/enseignant.",
+      "item": [
+        {
+          "name": "Lister les wilayas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/wilayas/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "wilayas",
+                ""
+              ]
+            },
+            "description": "Lecture ouverte a tout utilisateur authentifie (ou anonyme, IsAuthenticatedOrReadOnly).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer une wilaya",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/wilayas/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "wilayas",
+                ""
+              ]
+            },
+            "description": "Ecriture -> necessite d'etre authentifie (IsAuthenticatedOrReadOnly).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": 1,\n  \"name\": \"Nouakchott\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) { pm.collectionVariables.set('wilaya_id', pm.response.json().id); }",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les utilisateurs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/users/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "users",
+                ""
+              ]
+            },
+            "description": "Un etudiant ne voit que lui-meme ; teacher/regional_admin/admin voient tout le monde.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Detail utilisateur (moi-meme)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/users/{{student_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "users",
+                "{{student_id}}",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Modifier mon profil",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/users/{{student_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "users",
+                "{{student_id}}",
+                ""
+              ]
+            },
+            "description": "Mise a jour partielle du profil (school, phone_number, wilaya, ...).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"school\": \"Ecole Ahmed Ould\",\n  \"phone_number\": \"22240000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Etudiant B consulte le profil d'Ahmed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/users/{{student_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "users",
+                "{{student_id}}",
+                ""
+              ]
+            },
+            "description": "IsOwnerOrAdmin : un etudiant ne peut pas voir le compte d'un autre etudiant.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_b_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('403 ou 404 (non proprietaire)', () => pm.expect([403,404]).to.include(pm.response.code));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les profils etudiants",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/student-profiles/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "student-profiles",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les profils enseignants",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/teacher-profiles/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "teacher-profiles",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Curriculum (Stage -> Level -> Subject -> Unit -> Lesson -> Goal)",
+      "description": "Hierarchie pedagogique complete. A executer dans l'ordre (chaque etape reutilise l'ID cree par la precedente).",
+      "item": [
+        {
+          "name": "Creer Stage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/stages/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "stages",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"المرحلة الابتدائية\",\n  \"code\": \"PRIM\",\n  \"order_index\": 1,\n  \"description\": \"Enseignement primaire\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('stage_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Level",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/levels/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "levels",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stage\": \"{{stage_id}}\",\n  \"name\": \"السنة الأولى ابتدائية\",\n  \"code\": \"PRIM-1\",\n  \"order_index\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('level_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Subject",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/subjects/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "subjects",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"level\": \"{{level_id}}\",\n  \"name\": \"الرياضيات\",\n  \"color\": \"#3498db\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('subject_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Unit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/units/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "units",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"{{subject_id}}\",\n  \"code\": \"U01\",\n  \"title\": \"الكسور\",\n  \"central_question\": \"كيف نجمع كسرين بمقامات مختلفة؟\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('unit_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Lesson",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/lessons/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "lessons",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"unit\": \"{{unit_id}}\",\n  \"code\": \"U01-L01\",\n  \"title\": \"جمع الكسور بمقامات مختلفة\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('lesson_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Goal Conceptual",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/goals/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "goals",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lesson\": \"{{lesson_id}}\",\n  \"goal_type\": \"conceptual\",\n  \"title\": \"فهم مفهوم القاسم المشترك\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('goal_conceptual_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Goal Operational",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/goals/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "goals",
+                ""
+              ]
+            },
+            "description": "Utilise pour rattacher les Skills operationnelles (skill_type doit correspondre au goal_type).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lesson\": \"{{lesson_id}}\",\n  \"goal_type\": \"operational\",\n  \"title\": \"جمع كسرين بمقامات مختلفة\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('goal_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Publier la Lesson AVANT d'avoir 2 goals valides",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/lessons/{{lesson_id}}/publish/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "lessons",
+                "{{lesson_id}}",
+                "publish",
+                ""
+              ]
+            },
+            "description": "Regle metier : il faut EXACTEMENT 1 Goal conceptual + 1 Goal operational. Ici c'est le cas -> 200 attendu si les deux goals ci-dessus existent deja.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 (les 2 goals existent) ou 400', () => pm.expect([200,400]).to.include(pm.response.code));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Etudiant tente de creer un Stage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/stages/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "stages",
+                ""
+              ]
+            },
+            "description": "IsTeacherOrAdminOrReadOnly : l'ecriture est reservee a teacher/regional_admin/admin.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test\",\n  \"code\": \"TEST-RBAC\",\n  \"order_index\": 99\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les Units",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/curriculum/units/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "curriculum",
+                "units",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Skills, Prerequisites & Chunks",
+      "description": "Cree la hierarchie Skill/Prerequisite/Chunk necessaire au scenario Ahmed du dossier suivant.",
+      "item": [
+        {
+          "name": "Creer Skill principale (Addition denom. differents)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/skills/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "skills",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"goal\": \"{{goal_id}}\",\n  \"code\": \"SK-U01-L01-C01\",\n  \"name\": \"جمع الكسور بمقامات مختلفة\",\n  \"skill_type\": \"operational\",\n  \"difficulty\": 2,\n  \"mastery_threshold\": 0.8,\n  \"required_consecutive_correct\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('skill_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Skill prerequise (PPCM)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/skills/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "skills",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"goal\": \"{{goal_id}}\",\n  \"code\": \"SK-U01-L00-PPCM\",\n  \"name\": \"المضاعف المشترك الأصغر\",\n  \"skill_type\": \"operational\",\n  \"difficulty\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('prereq_skill_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lier la Skill a son prerequis (PPCM)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/prerequisites/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "prerequisites",
+                ""
+              ]
+            },
+            "description": "Utilise par le Decision Engine (Probleme 3) pour rediriger un etudiant bloque.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{skill_id}}\",\n  \"prerequisite\": \"{{prereq_skill_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Cycle de prerequis",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/prerequisites/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "prerequisites",
+                ""
+              ]
+            },
+            "description": "PPCM ne peut pas a son tour avoir la Skill principale comme prerequis (creerait un cycle).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{prereq_skill_id}}\",\n  \"prerequisite\": \"{{skill_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('400 Bad Request (cycle detecte)', () => pm.response.to.have.status(400));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Chunk 'rule' (Skill principale)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/chunks/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "chunks",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{skill_id}}\",\n  \"code\": \"CH-U01-L01-RULE\",\n  \"chunk_type\": \"rule\",\n  \"title\": \"مفهوم جمع الكسور\",\n  \"content\": \"لجمع كسرين بمقامات مختلفة، نوحد المقامات أولا...\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('chunk_rule_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Chunk 'example'",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/chunks/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "chunks",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{skill_id}}\",\n  \"code\": \"CH-U01-L01-EX\",\n  \"chunk_type\": \"example\",\n  \"title\": \"مثال محلول\",\n  \"content\": \"1/4 + 1/6 = 3/12 + 2/12 = 5/12\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Chunk 'practice' (1/2 + 1/3 = ?)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/chunks/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "chunks",
+                ""
+              ]
+            },
+            "description": "correct_answer='5/6'. C'est CE champ que la revue de l'API interdit d'exposer aux etudiants.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{skill_id}}\",\n  \"code\": \"CH-U01-L01-PRACT1\",\n  \"chunk_type\": \"practice\",\n  \"title\": \"1/2 + 1/3 = ?\",\n  \"content\": \"1/2 + 1/3 = ?\",\n  \"correct_answer\": \"5/6\",\n  \"options\": [\n    \"2/5\",\n    \"5/6\",\n    \"4/6\"\n  ],\n  \"difficulty\": 2,\n  \"time_limit\": 60\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const data = pm.response.json();",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('chunk_practice_id', data.id);",
+                  "pm.test('correct_answer visible pour un enseignant', () => pm.expect(data.correct_answer).to.eql('5/6'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer 2e Chunk 'practice' (regle CMS: min 2 practice)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/chunks/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "chunks",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{skill_id}}\",\n  \"code\": \"CH-U01-L01-PRACT2\",\n  \"chunk_type\": \"practice\",\n  \"title\": \"1/4 + 1/2 = ?\",\n  \"content\": \"1/4 + 1/2 = ?\",\n  \"correct_answer\": \"3/4\",\n  \"options\": [\n    \"2/6\",\n    \"3/4\",\n    \"1/2\"\n  ],\n  \"difficulty\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creer Chunk 'rule' (Skill PPCM)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/skills/chunks/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "chunks",
+                ""
+              ]
+            },
+            "description": "Sera renvoye par next-action lors d'une redirection vers le prerequis.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{prereq_skill_id}}\",\n  \"code\": \"CH-U01-L00-PPCM-RULE\",\n  \"chunk_type\": \"rule\",\n  \"title\": \"قاعدة المضاعف المشترك الأصغر\",\n  \"content\": \"المضاعف المشترك الأصغر هو...\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Securite] GET chunk practice en tant qu'ETUDIANT",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/skills/chunks/{{chunk_practice_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "chunks",
+                "{{chunk_practice_id}}",
+                ""
+              ]
+            },
+            "description": "Point critique de securite (Probleme 1 de la revue) : correct_answer NE DOIT PAS apparaitre.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test(\"correct_answer est absent pour un etudiant\", () => {",
+                  "    pm.expect(pm.response.json()).to.not.have.property('correct_answer');",
+                  "});",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Securite] GET chunk practice en tant qu'ENSEIGNANT",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/skills/chunks/{{chunk_practice_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "chunks",
+                "{{chunk_practice_id}}",
+                ""
+              ]
+            },
+            "description": "Un enseignant/admin gere le contenu -> correct_answer doit rester visible.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('correct_answer visible pour un enseignant', () => {",
+                  "    pm.expect(pm.response.json().correct_answer).to.eql('5/6');",
+                  "});",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verifier publication_check de la Skill",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/skills/skills/{{skill_id}}/publication_check/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "skills",
+                "{{skill_id}}",
+                "publication_check",
+                ""
+              ]
+            },
+            "description": "Regle CMS : au moins 1 rule, 1 example, 2 practice avant publication. ready=true attendu ici.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('ready = true', () => pm.expect(pm.response.json().ready).to.eql(true));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister les prerequisites d'une Skill",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/skills/skills/{{skill_id}}/prerequisites/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "skills",
+                "skills",
+                "{{skill_id}}",
+                "prerequisites",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Moteur d'apprentissage - Scenario Ahmed (Decision Engine)",
+      "description": "Coeur de la revue de l'API (Problemes 1, 2 et 3). A executer APRES le dossier '3. Skills, Prerequisites & Chunks' et DANS L'ORDRE : chaque etape modifie la progression d'Ahmed sur la skill et la suivante s'appuie sur ce nouvel etat.",
+      "item": [
+        {
+          "name": "Etape 1 - Ahmed repond FAUX '2/5' (Probleme 1)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/answer/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "answer",
+                ""
+              ]
+            },
+            "description": "Reproduit exactement l'exemple de la revue de l'API : Ahmed choisit '2/5' au lieu de '5/6'.\nLe Frontend n'envoie QUE chunk_id/answer/time_taken : is_correct, error_type et error_detail sont calcules cote serveur (jamais par le client).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chunk_id\": \"{{chunk_practice_id}}\",\n  \"answer\": \"2/5\",\n  \"time_taken\": 15\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.test('is_correct = false', () => pm.expect(data.is_correct).to.eql(false));",
+                  "pm.test('error_type calcule cote serveur', () => pm.expect(data.error_type).to.be.oneOf(['concept','procedure','careless']));",
+                  "pm.test('progress.attempts = 1', () => pm.expect(data.progress.attempts).to.eql(1));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Etape 2 - Consulter next-action (chunk attendu)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/next-action/?skill={{skill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "next-action",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "skill",
+                  "value": "{{skill_id}}"
+                }
+              ]
+            },
+            "description": "mastery encore faible et attempts < 3 -> action='show_chunk' (Probleme 2, choix interne a la skill).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test(\"action = 'show_chunk'\", () => pm.expect(pm.response.json().action).to.eql('show_chunk'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Etape 3 - Ahmed repond CORRECT (equivalent '10/12')",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/answer/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "answer",
+                ""
+              ]
+            },
+            "description": "Teste la gestion des equivalences mathematiques : 10/12 est mathematiquement egal a 5/6.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chunk_id\": \"{{chunk_practice_id}}\",\n  \"answer\": \"10/12\",\n  \"time_taken\": 20\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test(\"10/12 est reconnu equivalent a 5/6 -> is_correct = true\", () => {",
+                  "    pm.expect(pm.response.json().is_correct).to.eql(true);",
+                  "});",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Soumettre une reponse sur un chunk non-practice",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/answer/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "answer",
+                ""
+              ]
+            },
+            "description": "Seuls les chunks chunk_type='practice' peuvent etre evalues -> 400 attendu.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chunk_id\": \"{{chunk_rule_id}}\",\n  \"answer\": \"peu importe\",\n  \"time_taken\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Securite] Fatima (etudiant B) tente de repondre a la place d'Ahmed",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/answer/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "answer",
+                ""
+              ]
+            },
+            "description": "Un etudiant ne peut agir que pour son propre compte -> 403.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chunk_id\": \"{{chunk_practice_id}}\",\n  \"answer\": \"5/6\",\n  \"time_taken\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_b_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Etape 4a - Ahmed re-echoue (2e faux, pour forcer le blocage)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/answer/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "answer",
+                ""
+              ]
+            },
+            "description": "On enchaine plusieurs echecs pour declencher la regle de redirection (Probleme 3 : attempts >= 3 et mastery < 0.5).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chunk_id\": \"{{chunk_practice_id}}\",\n  \"answer\": \"reponse fausse 1\",\n  \"time_taken\": 12\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Etape 4b - Ahmed re-echoue (3e faux)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/answer/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "answer",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chunk_id\": \"{{chunk_practice_id}}\",\n  \"answer\": \"reponse fausse 2\",\n  \"time_taken\": 12\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const p = pm.response.json().progress;",
+                  "pm.test('attempts >= 3', () => pm.expect(p.attempts).to.be.at.least(3));",
+                  "pm.test('mastery < 0.5', () => pm.expect(parseFloat(p.mastery)).to.be.below(0.5));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Etape 5 - next-action redirige vers le prerequis (PPCM)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/next-action/?skill={{skill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "next-action",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "skill",
+                  "value": "{{skill_id}}"
+                }
+              ]
+            },
+            "description": "Ahmed est maintenant bloque (Probleme 3) : le Decision Engine doit renvoyer action='redirect_to_prerequisite' avec la skill PPCM et son premier chunk 'rule'.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.test(\"action = 'redirect_to_prerequisite'\", () => pm.expect(data.action).to.eql('redirect_to_prerequisite'));",
+                  "pm.test('new_skill = PPCM', () => pm.expect(data.new_skill.code).to.eql('SK-U01-L00-PPCM'));",
+                  "pm.test('un chunk de type rule est fourni', () => pm.expect(data.chunk.chunk_type).to.eql('rule'));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] next-action sans parametre 'skill'",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/next-action/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "next-action",
+                ""
+              ]
+            },
+            "description": "Le parametre 'skill' est obligatoire -> 400.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Securite] Fatima consulte next-action pour Ahmed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/next-action/?skill={{skill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "next-action",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "skill",
+                  "value": "{{skill_id}}"
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_b_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Supervision] Enseignant consulte next-action pour Ahmed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_id}}/next-action/?skill={{skill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_id}}",
+                "next-action",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "skill",
+                  "value": "{{skill_id}}"
+                }
+              ]
+            },
+            "description": "Teacher/regional_admin/admin PEUVENT agir/consulter pour n'importe quel etudiant (supervision).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK (supervision autorisee)', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Assessment - CRUD bas niveau",
+      "description": "Endpoints CRUD directs sur Error/StudentProgress/LogAnswer (utilises en interne par le Decision Engine).",
+      "item": [
+        {
+          "name": "Creer une entree du catalogue Error",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/assessment/errors/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "assessment",
+                "errors",
+                ""
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skill\": \"{{skill_id}}\",\n  \"code\": \"ERR-U01-L01-001\",\n  \"category\": \"concept\",\n  \"error_type\": \"Addition directe numerateurs et denominateurs\",\n  \"root_cause\": \"L'eleve additionne 1/2+1/3 comme 2/5\",\n  \"severity_level\": \"medium\",\n  \"feedback_message\": \"Regardons a nouveau la regle...\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('error_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister le catalogue d'erreurs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/assessment/errors/?skill={{skill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "assessment",
+                "errors",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "skill",
+                  "value": "{{skill_id}}"
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lister ma progression (StudentProgress)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/assessment/progress/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "assessment",
+                "progress",
+                ""
+              ]
+            },
+            "description": "Un etudiant ne voit que sa propre progression ; enseignant/admin voient tout.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ancien endpoint - next_recommendation (Probleme 3 seul, avant unification)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/assessment/progress/next_recommendation/?skill={{skill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "assessment",
+                "progress",
+                "next_recommendation",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "skill",
+                  "value": "{{skill_id}}"
+                }
+              ]
+            },
+            "description": "Conserve pour compatibilite : logique de redirection SEULE (sans le choix de chunk du Probleme 2). Utilise request.user directement (pas de student_id dans l'URL) -> fonctionne uniquement 'pour soi-meme'. Preferer /api/students/{id}/next-action/ desormais.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Log Answers - creation manuelle (usage enseignant/correction)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/assessment/log-answers/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "assessment",
+                "log-answers",
+                ""
+              ]
+            },
+            "description": "L'ANCIEN endpoint 'naif' decrit en Probleme 1 de la revue : is_correct/error_type doivent etre fournis par le CLIENT. Volontairement conserve pour permettre a un enseignant de logger une correction manuelle, mais NE JAMAIS utiliser ce endpoint depuis le Frontend etudiant (c'est exactement la faille de securite documentee) - preferer POST /api/students/{id}/answer/.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"student\": \"{{student_id}}\",\n  \"skill\": \"{{skill_id}}\",\n  \"chunk\": \"{{chunk_practice_id}}\",\n  \"answer\": \"2/5\",\n  \"is_correct\": false,\n  \"error_type\": \"concept\",\n  \"time_taken\": 15\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('log_answer_id', pm.response.json().id);",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Modifier un log_answers (append-only)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/assessment/log-answers/{{log_answer_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "assessment",
+                "log-answers",
+                "{{log_answer_id}}",
+                ""
+              ]
+            },
+            "description": "log_answers est append-only (Regle 8 du cahier des charges) : aucune methode update n'est exposee -> 405.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answer\": \"modifie\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('405 Method Not Allowed', () => pm.response.to.have.status(405));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Supprimer un log_answers (append-only)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/assessment/log-answers/{{log_answer_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "assessment",
+                "log-answers",
+                "{{log_answer_id}}",
+                ""
+              ]
+            },
+            "description": "Meme regle : aucune methode destroy n'est exposee -> 405.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('405 Method Not Allowed', () => pm.response.to.have.status(405));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Analytics (Enseignant/Admin)",
+      "description": "Statistiques calculees a la volee (aucune table dediee), reservees a l'encadrement pedagogique.",
+      "item": [
+        {
+          "name": "Tableau de bord de classe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/class-dashboard/?level={{level_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "class-dashboard",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "level",
+                  "value": "{{level_id}}"
+                }
+              ]
+            },
+            "description": "Pour chaque etudiant : skills commencees/maitrisees, mastery moyen, derniere activite.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Analyse des erreurs d'un etudiant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/students/{{student_id}}/error-analysis/?days=7",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "students",
+                "{{student_id}}",
+                "error-analysis",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "days",
+                  "value": "7"
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{teacher_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Securite] Etudiant tente d'acceder au dashboard de classe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/class-dashboard/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "analytics",
+                "class-dashboard",
+                ""
+              ]
+            },
+            "description": "Reserve a teacher/regional_admin/admin -> 403 pour un etudiant.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Securite generale",
+      "description": "Verifications transverses independantes du scenario Ahmed.",
+      "item": [
+        {
+          "name": "[Negatif] Acceder a /me/ sans token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me",
+                ""
+              ]
+            },
+            "description": "Aucun header Authorization -> 401.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Negatif] Token invalide / corrompu",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me",
+                ""
+              ]
+            },
+            "description": "Un JWT malforme doit etre rejete proprement, pas planter le serveur.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "token.invalide.corrompu",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8. Tests pilotes par fichier de donnees (Collection Runner)",
+      "description": "Demontre le testing 'data-driven' de Postman : au lieu d'ecrire une requete par cas, on rejoue LA MEME requete plusieurs fois en lui injectant des lignes differentes depuis postman/data/answer_scenarios.data.json (colonnes -> variables {{...}} disponibles pour cette iteration). Voir la description de la requete ci-dessous pour le mode d'emploi exact.",
+      "item": [
+        {
+          "name": "[Data-Driven] Soumettre une reponse (matrice de classification)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/students/{{student_b_id}}/answer/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "students",
+                "{{student_b_id}}",
+                "answer",
+                ""
+              ]
+            },
+            "description": "A EXECUTER VIA COLLECTION RUNNER (pas via un simple clic Send), avec le fichier de donnees postman/data/answer_scenarios.data.json attache dans l'onglet 'Data'.\n\n7 iterations, executees sequentiellement sur le MEME etudiant (Fatima / student_b) pour faire evoluer sa progression de facon previsible et couvrir toute la matrice de classification du Decision Engine (assessment/engine.py) :\n  1) premiere erreur              -> concept\n  2) reponse equivalente correcte -> is_correct=true (10/12 = 5/6)\n  3) erreur apres un succes       -> procedure\n  4) erreur donnee tres vite      -> careless (< 20% de la limite de temps)\n  5) reponse exacte correcte      -> is_correct=true\n  6) chunk non-practice           -> 400\n  7) chunk_id manquant            -> 400\n\nPre-requisite : avoir execute au moins une fois les dossiers 0 (Authentification, pour creer Fatima/student_b) et 3 (Skills/Chunks, pour creer chunk_practice_id/chunk_rule_id).\n\nEn ligne de commande (Newman) :\n  newman run FATIN_API.postman_collection.json \\\n    -e FATIN_Local.postman_environment.json \\\n    -d data/answer_scenarios.data.json \\\n    --folder \"8. Tests pilotes par fichier de donnees\"",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chunk_id\": \"{{__chunk_id_for_this_case}}\",\n  \"answer\": \"{{answer}}\",\n  \"time_taken\": {{time_taken}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{student_b_access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "const mode = pm.iterationData.get('chunk_mode') || 'practice';",
+                  "let chunkId = pm.variables.get('chunk_practice_id');",
+                  "if (mode === 'rule') {",
+                  "    chunkId = pm.variables.get('chunk_rule_id');",
+                  "} else if (mode === 'missing') {",
+                  "    chunkId = '';",
+                  "}",
+                  "pm.variables.set('__chunk_id_for_this_case', chunkId);",
+                  "})();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "(function(){",
+                  "const rawStatus = pm.iterationData.get('expected_status');",
+                  "if (rawStatus === undefined || rawStatus === null || rawStatus === '') {",
+                  "    pm.test('Aucun fichier de donnees attache (voir la description de la requete)', () => {});",
+                  "    return;",
+                  "}",
+                  "const expectedStatus = parseInt(rawStatus, 10);",
+                  "const label = pm.iterationData.get('case_label');",
+                  "",
+                  "pm.test(`[${label}] status = ${expectedStatus}`, () => {",
+                  "    pm.response.to.have.status(expectedStatus);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    const data = pm.response.json();",
+                  "    const expectedCorrect = pm.iterationData.get('expected_is_correct');",
+                  "    if (typeof expectedCorrect === 'boolean') {",
+                  "        pm.test(`[${label}] is_correct = ${expectedCorrect}`, () => {",
+                  "            pm.expect(data.is_correct).to.eql(expectedCorrect);",
+                  "        });",
+                  "    }",
+                  "    const expectedErrorType = pm.iterationData.get('expected_error_type');",
+                  "    if (expectedErrorType) {",
+                  "        pm.test(`[${label}] error_type = ${expectedErrorType}`, () => {",
+                  "            pm.expect(data.error_type).to.eql(expectedErrorType);",
+                  "        });",
+                  "    }",
+                  "}",
+                  "})();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{student_access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "student_access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "student_refresh_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "student_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "student_b_access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "student_b_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "teacher_access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "teacher_refresh_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "teacher_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "wilaya_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "stage_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "level_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "subject_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "unit_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lesson_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "goal_conceptual_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "goal_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "skill_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "prereq_skill_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "chunk_rule_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "chunk_practice_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "error_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "log_answer_id",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

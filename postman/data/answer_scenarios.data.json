@@ -1,0 +1,72 @@
+[
+  {
+    "case_label": "1-premiere-erreur-concept",
+    "description": "Premier echec de Fatima sur ce chunk (attempts=0 avant) -> classification CONCEPT",
+    "chunk_mode": "practice",
+    "answer": "2/5",
+    "time_taken": 20,
+    "expected_status": 200,
+    "expected_is_correct": false,
+    "expected_error_type": "concept"
+  },
+  {
+    "case_label": "2-correct-par-equivalence",
+    "description": "10/12 est mathematiquement egal a 5/6 -> is_correct doit etre true",
+    "chunk_mode": "practice",
+    "answer": "10/12",
+    "time_taken": 25,
+    "expected_status": 200,
+    "expected_is_correct": true,
+    "expected_error_type": null
+  },
+  {
+    "case_label": "3-echec-apres-succes-procedure",
+    "description": "Fatima a deja reussi une fois (correct_count>0) -> un nouvel echec est classe PROCEDURE",
+    "chunk_mode": "practice",
+    "answer": "4/6",
+    "time_taken": 20,
+    "expected_status": 200,
+    "expected_is_correct": false,
+    "expected_error_type": "procedure"
+  },
+  {
+    "case_label": "4-echec-rapide-careless",
+    "description": "Reponse fausse donnee en 5s (< 20% de la limite de 60s) -> classification CARELESS quel que soit l'historique",
+    "chunk_mode": "practice",
+    "answer": "1/1",
+    "time_taken": 5,
+    "expected_status": 200,
+    "expected_is_correct": false,
+    "expected_error_type": "careless"
+  },
+  {
+    "case_label": "5-correct-reponse-exacte",
+    "description": "Reponse exacte '5/6' (sans passer par l'equivalence de fractions)",
+    "chunk_mode": "practice",
+    "answer": "5/6",
+    "time_taken": 30,
+    "expected_status": 200,
+    "expected_is_correct": true,
+    "expected_error_type": null
+  },
+  {
+    "case_label": "6-negatif-chunk-non-practice",
+    "description": "Le chunk vise est de type 'rule', pas 'practice' -> doit etre rejete",
+    "chunk_mode": "rule",
+    "answer": "peu importe",
+    "time_taken": 10,
+    "expected_status": 400,
+    "expected_is_correct": null,
+    "expected_error_type": null
+  },
+  {
+    "case_label": "7-negatif-chunk-id-manquant",
+    "description": "chunk_id absent de la requete -> 400",
+    "chunk_mode": "missing",
+    "answer": "5/6",
+    "time_taken": 10,
+    "expected_status": 400,
+    "expected_is_correct": null,
+    "expected_error_type": null
+  }
+]
