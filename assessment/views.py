@@ -102,6 +102,9 @@ class LogAnswerViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     Création (obligatoire, append-only) et lecture seule.
     Aucune méthode update/destroy n'est exposée (Partie 4.3, Règle 8).
     """
+    # AJOUTER CETTE LIGNE POUR LIMITER LES MÉTHODES HTTP
+    http_method_names = ['get', 'post', 'head', 'options']
+    
     queryset = LogAnswer.objects.select_related('student', 'skill', 'chunk', 'error_detail').all()
     serializer_class = LogAnswerSerializer
     permission_classes = [permissions.IsAuthenticated]

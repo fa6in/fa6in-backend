@@ -26,14 +26,28 @@ Including another URLconf
 edtech_api/urls.py
 """
 
+"""
+project/urls.py
+"""
+
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework_simplejwt.views import TokenRefreshView
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularRedocView,
+    SpectacularSwaggerView
+)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    
+    # Swagger/OpenAPI
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     
     # Authentication
     path('api/auth/', include('users.urls')),
@@ -47,11 +61,11 @@ urlpatterns = [
     
     # Analytics
     path('api/analytics/', include('analytics.urls')),
-
-    # أضف هذا المسار
+    
+    # Skills
     path('api/skills/', include('skills.urls')),
     
-    # Health check
+    # Health check (optionnel)
     # path('api/health/', include('health_check.urls')),
 ]
 

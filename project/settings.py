@@ -50,7 +50,7 @@ INSTALLED_APPS = [
     'django_filters',
     'django_extensions',
     'django_rest_passwordreset',
-    
+    'drf_spectacular',    
     # Local apps
     'users',
     'core',
@@ -60,12 +60,22 @@ INSTALLED_APPS = [
     'skills',
 ]
 
+#MIDDLEWARE = [
+#    'django.middleware.security.SecurityMiddleware',
+#    'django.contrib.sessions.middleware.SessionMiddleware',
+#    'django.middleware.common.CommonMiddleware',
+#    'corsheaders.middleware.CorsMiddleware',  # ← AJOUTEZ-CE CI
+#    'django.middleware.locale.LocaleMiddleware',  # ← TRÈS IMPORTANT pour la langue
+#    'django.middleware.csrf.CsrfViewMiddleware',
+#    'django.contrib.auth.middleware.AuthenticationMiddleware',
+#    'django.contrib.messages.middleware.MessageMiddleware',
+#    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+#]
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'corsheaders.middleware.CorsMiddleware',  # ← AJOUTEZ-CE CI
-    'django.middleware.locale.LocaleMiddleware',  # ← TRÈS IMPORTANT pour la langue
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -183,6 +193,7 @@ ADMIN_REGISTRATION_ALLOWED_IPS = os.environ.get(
 
 # REST Framework
 REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
@@ -198,6 +209,21 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
 }
+
+# Swagger settings
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'EdTech API Documentation',
+    'DESCRIPTION': 'API pour la plateforme EdTech',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayOperationId': True,
+    },
+}
+
 # Custom User Model
 AUTH_USER_MODEL = 'users.User'
 # JWT Settings
