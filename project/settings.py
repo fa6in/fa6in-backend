@@ -159,7 +159,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # CORS
-# CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000').split(',')
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
 CORS_ALLOW_CREDENTIALS = True
 
 # Static files
@@ -242,13 +245,25 @@ SIMPLE_JWT = {
 """
 
 
-# Configuration pour l'email (exemple avec Gmail)
+# EmailJS Configuration (envoi principal du code de réinitialisation)
+EMAILJS_SERVICE_ID = 'service_sq4202q'
+EMAILJS_TEMPLATE_ID = 'template_kaju9ok'
+EMAILJS_USER_ID = 'wECma4MHin_d8sry7'  # Public Key
+EMAILJS_PRIVATE_KEY = 'Z5Sh-2rz_oMbVuPbWqJgS'  # Private Key - OBLIGATOIRE pour mode strict
+
+# Configuration Email avec Gmail (fallback si EmailJS échoue)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_HOST_USER = 'mbaremedsalemmbare@gmail.com'
-EMAIL_HOST_PASSWORD = 'whba eakr algq ybtr'
+EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_PORT = '587'
+EMAIL_USE_SSL = False
+EMAIL_HOST_USER = 'mbaremedsalemmbare@gmail.com'
+EMAIL_HOST_PASSWORD = 'jxuh azrn pmmj kied'
+DEFAULT_FROM_EMAIL = 'mbaremedsalemmbare@gmail.com'
+
+# Validité du code de réinitialisation de mot de passe (minutes)
+PASSWORD_RESET_CODE_VALIDITY_MINUTES = 10
+PASSWORD_RESET_CODE_MAX_ATTEMPTS = 5
 
 # Configuration django-rest-passwordreset
 DJANGO_REST_PASSWORDRESET_TOKEN_CONFIG = {

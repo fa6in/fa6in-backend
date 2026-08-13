@@ -8,9 +8,14 @@ Tables : User, StudentProfile, TeacherProfile, Wilaya
 Basé sur : FATIN_Schema_Final_Complet.docx - Partie 3, Catégorie A
 """
 
+import random
+from datetime import timedelta
+
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -160,6 +165,54 @@ class StudentProfile(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean(exclude=None, validate_unique=False)
         super().save(*args, **kwargs)
+
+
+class PasswordResetCode(models.Model):
+    """
+    Code à 4 chiffres envoyé par email pour la réinitialisation du mot de passe
+    (flux "mot de passe oublié").
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='password_reset_codes',
+        verbose_name=_('المستخدم'),
+    )
+    code = models.CharField(_('الرمز'), max_length=4)
+    created_at = models.DateTimeField(_('تاريخ الإنشاء'), auto_now_add=True)
+    expires_at = models.DateTimeField(_('تاريخ الانتهاء'))
+    is_used = models.BooleanField(_('مستخدم'), default=False)
+    attempts = models.PositiveSmallIntegerField(_('عدد المحاولات'), default=0)
+
+    class Meta:
+        verbose_name = _('رمز إعادة تعيين كلمة المرور')
+        verbose_name_plural = _('رموز إعادة تعيين كلمة المرور')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.email} - {self.code}"
+
+    def is_valid(self):
+        max_attempts = getattr(settings, 'PASSWORD_RESET_CODE_MAX_ATTEMPTS', 5)
+        return (
+            not self.is_used
+            and self.attempts < max_attempts
+            and timezone.now() <= self.expires_at
+        )
+
+    @staticmethod
+    def generate_code():
+        return f"{random.randint(0, 9999):04d}"
+
+    @classmethod
+    def create_for_user(cls, user):
+        validity_minutes = getattr(settings, 'PASSWORD_RESET_CODE_VALIDITY_MINUTES', 10)
+        user.password_reset_codes.filter(is_used=False).update(is_used=True)
+        return cls.objects.create(
+            user=user,
+            code=cls.generate_code(),
+            expires_at=timezone.now() + timedelta(minutes=validity_minutes),
+        )
 
 
 class TeacherProfile(models.Model):

@@ -10,7 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from django.contrib.auth import authenticate
 
-from .models import User, Wilaya, StudentProfile, TeacherProfile
+from .models import User, Wilaya, StudentProfile, TeacherProfile, PasswordResetCode
 from .serializers import (
     UserSerializer,
     UserRegistrationSerializer,
@@ -18,7 +18,10 @@ from .serializers import (
     StudentProfileSerializer,
     TeacherProfileSerializer,
     ChangePasswordSerializer,
+    ForgotPasswordSerializer,
+    ResetPasswordSerializer,
 )
+from utilities.emailjs import send_password_reset_code_email
 
 
 class IsOwnerOrAdmin(permissions.BasePermission):
@@ -156,6 +159,64 @@ class MeView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class ForgotPasswordView(APIView):
+    """
+    POST /api/auth/forgot-password/  {email}
+    Génère un code à 4 chiffres et l'envoie par email s'il existe un compte
+    avec cette adresse. La réponse est volontairement générique pour ne pas
+    révéler si l'email est enregistré.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = ForgotPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+
+        user = User.objects.filter(email__iexact=email).first()
+        if user is not None:
+            reset_code = PasswordResetCode.create_for_user(user)
+            send_password_reset_code_email(user, reset_code.code)
+
+        return Response(
+            {'detail': "Si cet email est associé à un compte, un code de vérification a été envoyé."}
+        )
+
+
+class ResetPasswordView(APIView):
+    """
+    POST /api/auth/reset-password/  {email, code, new_password, new_password_confirm}
+    Vérifie le code reçu par email puis réinitialise le mot de passe.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        user = User.objects.filter(email__iexact=data['email']).first()
+        if user is None:
+            return Response({'detail': "Code invalide ou expiré."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reset_code = user.password_reset_codes.filter(is_used=False).order_by('-created_at').first()
+        if reset_code is None or not reset_code.is_valid():
+            return Response({'detail': "Code invalide ou expiré."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if reset_code.code != data['code']:
+            reset_code.attempts += 1
+            reset_code.save(update_fields=['attempts'])
+            return Response({'detail': "Code invalide ou expiré."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(data['new_password'])
+        user.save()
+
+        reset_code.is_used = True
+        reset_code.save(update_fields=['is_used'])
+
+        return Response({'detail': "Mot de passe réinitialisé avec succès."})
 
 
 class LogoutView(APIView):
