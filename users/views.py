@@ -156,6 +156,30 @@ class AdminTeacherListView(generics.ListAPIView):
     )
 
 
+class AdminStudentDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/auth/admin/students/<id>/
+    Détail d'un étudiant, réservé aux administrateurs.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrRegionalAdmin]
+    queryset = User.objects.filter(role=User.Role.STUDENT).select_related(
+        'wilaya', 'student_profile', 'student_profile__level'
+    )
+
+
+class AdminTeacherDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/auth/admin/teachers/<id>/
+    Détail d'un enseignant, réservé aux administrateurs.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrRegionalAdmin]
+    queryset = User.objects.filter(role=User.Role.TEACHER).select_related(
+        'wilaya', 'teacher_profile'
+    )
+
+
 def _jwt_pair_for(user):
     refresh = RefreshToken.for_user(user)
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}

@@ -13,7 +13,9 @@ from .views import (
     ForgotPasswordView,
     ResetPasswordView,
     AdminStudentListView,
+    AdminStudentDetailView,
     AdminTeacherListView,
+    AdminTeacherDetailView,
 )
 
 urlpatterns = [
@@ -66,7 +68,9 @@ urlpatterns = [
     
     # Admin - Students / Teachers
     path('admin/students/', AdminStudentListView.as_view(), name='admin-student-list'),
+    path('admin/students/<int:pk>/', AdminStudentDetailView.as_view(), name='admin-student-detail'),
     path('admin/teachers/', AdminTeacherListView.as_view(), name='admin-teacher-list'),
+    path('admin/teachers/<int:pk>/', AdminTeacherDetailView.as_view(), name='admin-teacher-detail'),
 
     # Teacher Profiles
     path('teacher-profiles/', TeacherProfileViewSet.as_view({
