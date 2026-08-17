@@ -40,6 +40,19 @@ class IsOwnerOrAdmin(permissions.BasePermission):
         return obj == request.user
 
 
+class IsAdminOrRegionalAdmin(permissions.BasePermission):
+    """
+    Réservé aux administrateurs (système ou régionaux).
+    """
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in (User.Role.ADMIN, User.Role.REGIONAL_ADMIN)
+        )
+
+
 class WilayaViewSet(viewsets.ModelViewSet):
     queryset = Wilaya.objects.all()
     serializer_class = WilayaSerializer
@@ -113,6 +126,34 @@ class TeacherProfileViewSet(viewsets.ModelViewSet):
         if user.role in (User.Role.ADMIN, User.Role.REGIONAL_ADMIN):
             return qs
         return qs.filter(user=user)
+
+
+class AdminStudentListView(generics.ListAPIView):
+    """
+    GET /api/auth/admin/students/
+    Liste de tous les étudiants, réservée aux administrateurs.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrRegionalAdmin]
+    filterset_fields = ['wilaya', 'is_active']
+    search_fields = ['username', 'email', 'first_name', 'last_name']
+    queryset = User.objects.filter(role=User.Role.STUDENT).select_related(
+        'wilaya', 'student_profile', 'student_profile__level'
+    )
+
+
+class AdminTeacherListView(generics.ListAPIView):
+    """
+    GET /api/auth/admin/teachers/
+    Liste de tous les enseignants, réservée aux administrateurs.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrRegionalAdmin]
+    filterset_fields = ['wilaya', 'is_active']
+    search_fields = ['username', 'email', 'first_name', 'last_name']
+    queryset = User.objects.filter(role=User.Role.TEACHER).select_related(
+        'wilaya', 'teacher_profile'
+    )
 
 
 def _jwt_pair_for(user):

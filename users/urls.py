@@ -12,6 +12,8 @@ from .views import (
     LogoutView,
     ForgotPasswordView,
     ResetPasswordView,
+    AdminStudentListView,
+    AdminTeacherListView,
 )
 
 urlpatterns = [
@@ -62,6 +64,10 @@ urlpatterns = [
         'delete': 'destroy'
     }), name='student-profile-detail'),
     
+    # Admin - Students / Teachers
+    path('admin/students/', AdminStudentListView.as_view(), name='admin-student-list'),
+    path('admin/teachers/', AdminTeacherListView.as_view(), name='admin-teacher-list'),
+
     # Teacher Profiles
     path('teacher-profiles/', TeacherProfileViewSet.as_view({
         'get': 'list',
