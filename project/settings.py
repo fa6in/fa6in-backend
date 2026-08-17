@@ -262,6 +262,10 @@ EMAIL_USE_SSL = False
 EMAIL_HOST_USER = 'mbaremedsalemmbare@gmail.com'
 EMAIL_HOST_PASSWORD = 'jxuh azrn pmmj kied'
 DEFAULT_FROM_EMAIL = 'mbaremedsalemmbare@gmail.com'
+# Le port SMTP sortant est souvent bloqué/filtré chez les hébergeurs cloud
+# (ex. DigitalOcean) : on limite le délai d'attente pour ne jamais bloquer
+# une requête HTTP en attendant une connexion SMTP qui ne répondra jamais.
+EMAIL_TIMEOUT = 10
 
 # Validité du code de réinitialisation de mot de passe (minutes)
 PASSWORD_RESET_CODE_VALIDITY_MINUTES = 10

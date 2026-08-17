@@ -28,15 +28,28 @@ def _send_via_emailjs(user, code):
     if not all([service_id, template_id, public_key, private_key]):
         return False
 
+    validity_minutes = getattr(settings, 'PASSWORD_RESET_CODE_VALIDITY_MINUTES', 10)
+
     payload = {
         'service_id': service_id,
         'template_id': template_id,
         'user_id': public_key,
         'accessToken': private_key,
         'template_params': {
+            # Variables utilisées dans le corps du template EmailJS.
+            'reset_code': code,
+            'user_name': user.get_full_name() or user.username,
+            'app_name': 'Ed-Tech',
+            'expiry_minutes': validity_minutes,
+            # Alias multiples pour le champ "To Email" du template (configuré
+            # séparément dans le dashboard EmailJS, hors du corps HTML) :
+            # on couvre les conventions les plus courantes.
             'to_email': user.email,
+            'email': user.email,
+            'user_email': user.email,
+            'reply_to': user.email,
             'to_name': user.get_full_name() or user.username,
-            'code': code,
+            'name': user.get_full_name() or user.username,
         },
     }
 

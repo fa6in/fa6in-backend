@@ -10,6 +10,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from django.contrib.auth import authenticate
 
+import logging
+
 from .models import User, Wilaya, StudentProfile, TeacherProfile, PasswordResetCode
 from .serializers import (
     UserSerializer,
@@ -22,6 +24,8 @@ from .serializers import (
     ResetPasswordSerializer,
 )
 from utilities.emailjs import send_password_reset_code_email
+
+logger = logging.getLogger(__name__)
 
 
 class IsOwnerOrAdmin(permissions.BasePermission):
@@ -178,7 +182,12 @@ class ForgotPasswordView(APIView):
         user = User.objects.filter(email__iexact=email).first()
         if user is not None:
             reset_code = PasswordResetCode.create_for_user(user)
-            send_password_reset_code_email(user, reset_code.code)
+            try:
+                send_password_reset_code_email(user, reset_code.code)
+            except Exception:
+                # L'envoi de l'email ne doit jamais faire échouer la requête ;
+                # le code reste valide même si la notification échoue.
+                logger.exception("Échec de l'envoi du code de réinitialisation à %s", user.email)
 
         return Response(
             {'detail': "Si cet email est associé à un compte, un code de vérification a été envoyé."}
