@@ -9,6 +9,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from curriculum.models import Unit
 from curriculum.views import IsTeacherOrAdminOrReadOnly
 from skills.models import Skill, Prerequisite, Chunk
 from skills.serializers import ChunkSerializer
@@ -16,6 +17,19 @@ from users.models import User
 from . import engine
 from .models import Error, StudentProgress, LogAnswer
 from .serializers import ErrorSerializer, StudentProgressSerializer, LogAnswerSerializer
+
+
+class IsTeacherOrAdmin(permissions.BasePermission):
+    """
+    Réservé aux enseignants et administrateurs (pas de lecture publique).
+    """
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in (User.Role.TEACHER, User.Role.REGIONAL_ADMIN, User.Role.ADMIN)
+        )
 
 
 def _ensure_can_act_for_student(request, student):
@@ -138,6 +152,30 @@ class LogAnswerViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             student=log.student, skill=log.skill,
         )
         progress.register_attempt(is_correct=log.is_correct, error_category=log.error_type)
+
+
+class UnitActivitiesView(APIView):
+    """
+    GET /api/assessment/units/<unit_id>/activities/
+
+    Les "activités" d'une unité sont les chunks (rule/example/practice/...)
+    des skills rattachées à ses leçons, réservé aux enseignants/admins
+    pour la gestion du contenu.
+    """
+    permission_classes = [IsTeacherOrAdmin]
+
+    def get(self, request, unit_id):
+        unit = get_object_or_404(Unit, pk=unit_id)
+        chunks = (
+            Chunk.objects
+            .filter(skill__goal__lesson__unit=unit)
+            .select_related('skill')
+            .order_by('skill__goal__lesson__order_index', 'skill__order_index', 'order_index')
+        )
+        chunk_type = request.query_params.get('chunk_type')
+        if chunk_type:
+            chunks = chunks.filter(chunk_type=chunk_type)
+        return Response(ChunkSerializer(chunks, many=True, context={'request': request}).data)
 
 
 class SubmitAnswerView(APIView):

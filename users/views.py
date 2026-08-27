@@ -230,6 +230,18 @@ class MeView(generics.RetrieveAPIView):
         return self.request.user
 
 
+class ProfileView(generics.RetrieveUpdateAPIView):
+    """
+    GET/PUT/PATCH /api/auth/profile/
+    Consultation et mise à jour du profil de l'utilisateur authentifié.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+
 class ForgotPasswordView(APIView):
     """
     POST /api/auth/forgot-password/  {email}

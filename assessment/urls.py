@@ -1,9 +1,21 @@
 # assessment/urls.py
 
 from django.urls import path
-from .views import ErrorViewSet, StudentProgressViewSet, LogAnswerViewSet
+from .views import ErrorViewSet, StudentProgressViewSet, LogAnswerViewSet, UnitActivitiesView
 
 urlpatterns = [
+    # Units - Activities
+    path('units/<int:unit_id>/activities/', UnitActivitiesView.as_view(), name='unit-activities'),
+
+    # Attempts (alias en lecture/écriture sur les logs de réponses)
+    path('attempts/', LogAnswerViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='attempt-list'),
+    path('attempts/<int:pk>/', LogAnswerViewSet.as_view({
+        'get': 'retrieve',
+    }), name='attempt-detail'),
+
     # Errors
     path('errors/', ErrorViewSet.as_view({
         'get': 'list',

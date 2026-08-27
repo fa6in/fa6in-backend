@@ -40,6 +40,9 @@ urlpatterns = [
         'patch': 'partial_update',
         'delete': 'destroy'
     }), name='unit-detail'),
+    path('units/<int:pk>/sections/', UnitViewSet.as_view({
+        'get': 'sections'
+    }), name='unit-sections'),
     
     # Lessons
     path('lessons/', LessonViewSet.as_view({

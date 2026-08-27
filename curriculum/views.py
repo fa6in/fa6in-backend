@@ -73,6 +73,16 @@ class UnitViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
+    @action(detail=True, methods=['get'])
+    def sections(self, request, pk=None):
+        """
+        GET /api/curriculum/units/<id>/sections/
+        Les "sections" d'une unité correspondent à ses leçons.
+        """
+        unit = self.get_object()
+        lessons = unit.lessons.all()
+        return Response(LessonListSerializer(lessons, many=True).data)
+
 
 class LessonViewSet(viewsets.ModelViewSet):
     queryset = Lesson.objects.select_related('unit').prefetch_related('goals').all()

@@ -27,3 +27,44 @@ class StudentErrorAnalysisRowSerializer(serializers.Serializer):
     root_cause = serializers.CharField(allow_null=True)
     severity_level = serializers.CharField(allow_null=True)
     occurrences = serializers.IntegerField()
+
+
+class ReportsOverviewSerializer(serializers.Serializer):
+    total_users = serializers.IntegerField()
+    total_students = serializers.IntegerField()
+    total_teachers = serializers.IntegerField()
+    total_units = serializers.IntegerField()
+    published_units = serializers.IntegerField()
+    total_skills = serializers.IntegerField()
+    total_attempts = serializers.IntegerField()
+    correct_attempts = serializers.IntegerField()
+    mastered_skills_count = serializers.IntegerField()
+    overall_average_mastery = serializers.FloatField()
+
+
+class ReportsUsageSerializer(serializers.Serializer):
+    period_days = serializers.IntegerField()
+    new_registrations = serializers.IntegerField()
+    active_students = serializers.IntegerField()
+    active_users_by_login = serializers.IntegerField()
+    total_attempts = serializers.IntegerField()
+    correct_attempts = serializers.IntegerField()
+    average_attempts_per_active_student = serializers.FloatField()
+
+
+class TeacherDashboardOverviewSerializer(serializers.Serializer):
+    total_students = serializers.IntegerField()
+    active_students_7d = serializers.IntegerField()
+    average_mastery = serializers.FloatField()
+    mastered_skills_total = serializers.IntegerField()
+    attempts_7d = serializers.IntegerField()
+
+
+class UnitPerformanceRowSerializer(serializers.Serializer):
+    unit_id = serializers.IntegerField()
+    unit_code = serializers.CharField()
+    unit_title = serializers.CharField()
+    skills_count = serializers.IntegerField()
+    average_mastery = serializers.FloatField()
+    students_mastered = serializers.IntegerField()
+    attempts_count = serializers.IntegerField()
