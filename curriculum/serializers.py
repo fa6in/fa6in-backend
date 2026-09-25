@@ -2,9 +2,19 @@
 curriculum/serializers.py
 """
 
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from .models import Stage, Level, Subject, Unit, Lesson, Goal
+
+User = get_user_model()
+
+
+class UserMiniSerializer(serializers.ModelSerializer):
+    """Version allégée du user, pour les FK created_by, etc."""
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name']
 
 
 class StageSerializer(serializers.ModelSerializer):
@@ -20,6 +30,11 @@ class LevelSerializer(serializers.ModelSerializer):
         model = Level
         fields = ['id', 'stage', 'stage_name', 'name', 'code', 'order_index', 'description']
 
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['stage'] = StageSerializer(instance.stage).data
+        return rep
+
 
 class SubjectSerializer(serializers.ModelSerializer):
     level_name = serializers.CharField(source='level.name', read_only=True)
@@ -31,6 +46,11 @@ class SubjectSerializer(serializers.ModelSerializer):
             'color', 'icon', 'is_active', 'created_at', 'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['level'] = LevelSerializer(instance.level).data
+        return rep
 
 
 class UnitListSerializer(serializers.ModelSerializer):
@@ -44,6 +64,11 @@ class UnitListSerializer(serializers.ModelSerializer):
             'id', 'code', 'title', 'subject', 'subject_name',
             'order_index', 'is_published', 'thumbnail', 'lessons_count',
         ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['subject'] = SubjectSerializer(instance.subject).data
+        return rep
 
 
 class UnitDetailSerializer(serializers.ModelSerializer):
@@ -59,6 +84,14 @@ class UnitDetailSerializer(serializers.ModelSerializer):
             'created_by_username', 'created_at',
         ]
         read_only_fields = ['created_at', 'created_by']
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['subject'] = SubjectSerializer(instance.subject).data
+        rep['created_by'] = (
+            UserMiniSerializer(instance.created_by).data if instance.created_by else None
+        )
+        return rep
 
 
 class GoalSerializer(serializers.ModelSerializer):
@@ -83,6 +116,11 @@ class GoalSerializer(serializers.ModelSerializer):
             )
         return attrs
 
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['lesson'] = LessonListSerializer(instance.lesson).data
+        return rep
+
 
 class LessonListSerializer(serializers.ModelSerializer):
     goals_complete = serializers.SerializerMethodField()
@@ -98,6 +136,11 @@ class LessonListSerializer(serializers.ModelSerializer):
         c = obj.goals.filter(goal_type=Goal.GoalType.CONCEPTUAL).count()
         o = obj.goals.filter(goal_type=Goal.GoalType.OPERATIONAL).count()
         return c == 1 and o == 1
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['unit'] = UnitListSerializer(instance.unit).data
+        return rep
 
 
 class LessonDetailSerializer(serializers.ModelSerializer):
@@ -123,3 +166,8 @@ class LessonDetailSerializer(serializers.ModelSerializer):
                     "1 Goal Conceptual et 1 Goal Operational."
                 )
         return attrs
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['unit'] = UnitListSerializer(instance.unit).data
+        return rep

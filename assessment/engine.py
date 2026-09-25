@@ -93,6 +93,24 @@ def pick_next_chunk(skill, progress: StudentProgress, exclude_chunk_id=None):
     elif progress.last_error_type == ErrorCategory.PROCEDURE:
         candidate_type, reason = Chunk.ChunkType.EXAMPLE, "Retour à un exemple car dernière erreur = procedure"
         qs = chunks.filter(chunk_type=candidate_type)
+    elif not progress.rule_seen:
+        # Onboarding, étape 1/2 : l'étudiant n'a JAMAIS vu la règle de
+        # cette skill (peu importe son mastery, toujours à 0.00 à ce
+        # stade). C'est next-action qui décide de la montrer, pas le
+        # Frontend -> respecte le principe "Backend = cerveau de FATIN".
+        reason = "Première visite : découverte de la règle"
+        qs = chunks.filter(chunk_type=Chunk.ChunkType.RULE)
+    elif not progress.example_seen:
+        # Onboarding, étape 2/2 : la règle a été vue mais pas l'exemple.
+        reason = "Première visite : découverte de l'exemple"
+        qs = chunks.filter(chunk_type=Chunk.ChunkType.EXAMPLE)
+    elif progress.attempts < 3:
+        # Phase de diagnostic : mastery vaut TOUJOURS 0.00 tant que
+        # attempts < 3 (register_attempt, règle 6 - "non fiable"), donc on
+        # ne s'y fie pas encore. L'onboarding (rule/example) étant terminé,
+        # on fait pratiquer directement sur un exercice facile.
+        reason = "Phase de diagnostic (< 3 tentatives) : exercice facile"
+        qs = chunks.filter(chunk_type=Chunk.ChunkType.PRACTICE, difficulty__lte=2)
     elif mastery < 0.5:
         reason = "Rappel de la règle (mastery < 0.5)"
         qs = chunks.filter(chunk_type=Chunk.ChunkType.RULE)

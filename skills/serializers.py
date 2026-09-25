@@ -4,7 +4,15 @@ skills/serializers.py
 
 from rest_framework import serializers
 
+from curriculum.serializers import GoalSerializer
 from .models import Skill, Prerequisite, Chunk
+
+
+class SkillMiniSerializer(serializers.ModelSerializer):
+    """Version allégée de Skill, pour les FK skill/prerequisite imbriquées."""
+    class Meta:
+        model = Skill
+        fields = ['id', 'code', 'name', 'skill_type', 'difficulty']
 
 
 class ChunkSerializer(serializers.ModelSerializer):
@@ -33,6 +41,9 @@ class ChunkSerializer(serializers.ModelSerializer):
         les enseignants/admins qui gèrent le contenu y ont accès.
         """
         data = super().to_representation(instance)
+
+        data['skill'] = SkillMiniSerializer(instance.skill).data
+
         request = self.context.get('request')
         user = getattr(request, 'user', None)
         from users.models import User
@@ -91,6 +102,12 @@ class PrerequisiteSerializer(serializers.ModelSerializer):
             stack.extend(qs.values_list('prerequisite_id', flat=True))
         return False
 
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['skill'] = SkillMiniSerializer(instance.skill).data
+        rep['prerequisite'] = SkillMiniSerializer(instance.prerequisite).data
+        return rep
+
 
 class SkillListSerializer(serializers.ModelSerializer):
     goal_type = serializers.CharField(source='goal.goal_type', read_only=True)
@@ -105,6 +122,11 @@ class SkillListSerializer(serializers.ModelSerializer):
 
     def get_chunks_ready(self, obj):
         return obj.chunks_meet_minimum()
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['goal'] = GoalSerializer(instance.goal).data
+        return rep
 
 
 class SkillDetailSerializer(serializers.ModelSerializer):
@@ -139,3 +161,8 @@ class SkillDetailSerializer(serializers.ModelSerializer):
                 )}
             )
         return attrs
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep['goal'] = GoalSerializer(instance.goal).data
+        return rep

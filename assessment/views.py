@@ -130,9 +130,6 @@ class LogAnswerViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     Création (obligatoire, append-only) et lecture seule.
     Aucune méthode update/destroy n'est exposée (Partie 4.3, Règle 8).
     """
-    # AJOUTER CETTE LIGNE POUR LIMITER LES MÉTHODES HTTP
-    http_method_names = ['get', 'post', 'head', 'options']
-    
     queryset = LogAnswer.objects.select_related('student', 'skill', 'chunk', 'error_detail').all()
     serializer_class = LogAnswerSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -262,6 +259,18 @@ class NextActionView(APIView):
 
         redirect = engine.find_prerequisite_redirect(student, skill)
         if redirect is not None:
+            # Même logique que ci-dessous : on sert la 'rule' du prérequis,
+            # donc on marque rule_seen pour SA progression à lui (pas celle
+            # de `skill`), afin que le prochain passage sur ce prérequis
+            # n'y reste pas non plus bloqué en boucle sur l'onboarding.
+            if redirect['chunk'] and redirect['chunk'].chunk_type == Chunk.ChunkType.RULE:
+                new_skill_progress, _c = StudentProgress.objects.get_or_create(
+                    student=student, skill=redirect['new_skill'],
+                )
+                if not new_skill_progress.rule_seen:
+                    new_skill_progress.rule_seen = True
+                    new_skill_progress.save(update_fields=['rule_seen'])
+
             return Response({
                 'action': 'redirect_to_prerequisite',
                 'previous_skill': {
@@ -291,6 +300,30 @@ class NextActionView(APIView):
             .first()
         )
         chunk, reason = engine.pick_next_chunk(skill, progress, exclude_chunk_id=last_chunk_id)
+
+        # Le fait de SERVIR un chunk 'rule'/'example' constitue, côté
+        # Backend, la preuve que l'étudiant y a été exposé (ces types ne
+        # passent jamais par /answer/, donc rien d'autre ne peut
+        # l'enregistrer). On persiste ça avant de répondre :
+        #
+        # 1. rule_seen / example_seen -> fait avancer l'onboarding
+        #    (rule -> example -> practice) sans AUCUNE logique côté
+        #    Frontend, qui reçoit juste "voici le chunk à afficher".
+        # 2. last_error_type -> remis à None une fois le rappel montré,
+        #    sinon last_error_type=='concept' bloquerait pick_next_chunk
+        #    sur RULE indéfiniment (un chunk que /answer/ refuse).
+        update_fields = []
+        if chunk and chunk.chunk_type == Chunk.ChunkType.RULE and not progress.rule_seen:
+            progress.rule_seen = True
+            update_fields.append('rule_seen')
+        if chunk and chunk.chunk_type == Chunk.ChunkType.EXAMPLE and not progress.example_seen:
+            progress.example_seen = True
+            update_fields.append('example_seen')
+        if progress.last_error_type and chunk and chunk.chunk_type != Chunk.ChunkType.PRACTICE:
+            progress.last_error_type = None
+            update_fields.append('last_error_type')
+        if update_fields:
+            progress.save(update_fields=update_fields)
 
         return Response({
             'action': 'show_chunk',

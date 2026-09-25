@@ -29,18 +29,20 @@ class StudentProgressAdmin(admin.ModelAdmin):
 
 @admin.register(LogAnswer)
 class LogAnswerAdmin(admin.ModelAdmin):
-    """
-    Lecture seule dans l'admin : log_answers est append-only,
-    la modification et la suppression sont interdites au niveau modèle.
-    """
     list_display = ('timestamp', 'student', 'chunk', 'is_correct', 'error_type', 'time_taken')
     list_filter = ('is_correct', 'error_type')
     search_fields = ('student__username', 'chunk__code')
     autocomplete_fields = ('student', 'skill', 'chunk', 'error_detail')
     readonly_fields = [f.name for f in LogAnswer._meta.fields]
 
+    # ✅ Suppression autorisée
+    def has_delete_permission(self, request, obj=None):
+        return True
+
+    # ⚠️ À garder False si vous voulez rester append-only en modification
     def has_change_permission(self, request, obj=None):
         return False
 
-    def has_delete_permission(self, request, obj=None):
-        return False
+    # ⚠️ Si has_change_permission est False, Django n'affiche PAS le bouton "Supprimer"
+    #    sur la page de détail. Pour pouvoir supprimer, il faut aussi autoriser le changement
+    #    OU passer par l'action "delete_selected" depuis la liste.

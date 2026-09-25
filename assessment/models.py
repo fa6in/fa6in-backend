@@ -87,6 +87,14 @@ class StudentProgress(models.Model):
     attempts = models.IntegerField(_('عدد المحاولات'), default=0)
     correct_count = models.IntegerField(_('عدد الإجابات الصحيحة'), default=0)
     mastery = models.DecimalField(_('نسبة الإتقان'), max_digits=3, decimal_places=2, default=0.00)
+    rule_seen = models.BooleanField(
+        _('تمت مشاهدة القاعدة'), default=False,
+        db_comment="True dès que NextActionView a servi un chunk 'rule' de cette skill à cet étudiant.",
+    )
+    example_seen = models.BooleanField(
+        _('تمت مشاهدة المثال'), default=False,
+        db_comment="True dès que NextActionView a servi un chunk 'example' de cette skill à cet étudiant.",
+    )
     consecutive_correct = models.IntegerField(_('الإجابات الصحيحة المتتالية'), default=0)
     last_error_type = models.CharField(
         _('نوع آخر خطأ'), max_length=20, choices=ErrorCategory.choices,

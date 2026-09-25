@@ -29,11 +29,13 @@ class StudentProgressSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'student', 'student_username', 'skill', 'skill_code', 'skill_name',
             'attempts', 'correct_count', 'mastery', 'consecutive_correct',
-            'last_error_type', 'status', 'started_at', 'mastered_at', 'last_activity',
+            'last_error_type', 'status', 'rule_seen', 'example_seen',
+            'started_at', 'mastered_at', 'last_activity',
         ]
         read_only_fields = [
             'attempts', 'correct_count', 'mastery', 'consecutive_correct',
-            'last_error_type', 'status', 'started_at', 'mastered_at', 'last_activity',
+            'last_error_type', 'status', 'rule_seen', 'example_seen',
+            'started_at', 'mastered_at', 'last_activity',
         ]
 
 
