@@ -18,6 +18,12 @@ class ClassDashboardRowSerializer(serializers.Serializer):
     skills_mastered = serializers.IntegerField()
     average_mastery = serializers.FloatField()
     last_active = serializers.DateTimeField(allow_null=True)
+    wilaya_name = serializers.CharField(allow_null=True)
+    inactive_days = serializers.IntegerField(allow_null=True)
+    concept_errors_14d = serializers.IntegerField()
+    blocked_skills = serializers.IntegerField()
+    needs_attention = serializers.BooleanField()
+    attention_reason = serializers.CharField(allow_null=True)
 
 
 class StudentErrorAnalysisRowSerializer(serializers.Serializer):
@@ -40,6 +46,7 @@ class ReportsOverviewSerializer(serializers.Serializer):
     correct_attempts = serializers.IntegerField()
     mastered_skills_count = serializers.IntegerField()
     overall_average_mastery = serializers.FloatField()
+    incomplete_skills = serializers.IntegerField()
 
 
 class ReportsUsageSerializer(serializers.Serializer):
@@ -50,6 +57,7 @@ class ReportsUsageSerializer(serializers.Serializer):
     total_attempts = serializers.IntegerField()
     correct_attempts = serializers.IntegerField()
     average_attempts_per_active_student = serializers.FloatField()
+    daily = serializers.ListField(child=serializers.DictField())
 
 
 class TeacherDashboardOverviewSerializer(serializers.Serializer):

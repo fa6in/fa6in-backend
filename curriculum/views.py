@@ -6,6 +6,7 @@ from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from skills.publishing import lesson_publication_checks
 from users.models import User
 from .models import Stage, Level, Subject, Unit, Lesson, Goal
 from .serializers import (
@@ -36,14 +37,26 @@ class IsTeacherOrAdminOrReadOnly(permissions.BasePermission):
         )
 
 
-class StageViewSet(viewsets.ModelViewSet):
+class PublicReadMixin:
+    """
+    Lecture publique (formulaire d'inscription : choix de l'année scolaire),
+    écriture réservée aux enseignants / admins.
+    """
+
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:
+            return [permissions.AllowAny()]
+        return super().get_permissions()
+
+
+class StageViewSet(PublicReadMixin, viewsets.ModelViewSet):
     queryset = Stage.objects.all()
     serializer_class = StageSerializer
     permission_classes = [IsTeacherOrAdminOrReadOnly]
     search_fields = ['name', 'code']
 
 
-class LevelViewSet(viewsets.ModelViewSet):
+class LevelViewSet(PublicReadMixin, viewsets.ModelViewSet):
     queryset = Level.objects.select_related('stage').all()
     serializer_class = LevelSerializer
     permission_classes = [IsTeacherOrAdminOrReadOnly]
@@ -73,6 +86,23 @@ class UnitViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
+    @action(detail=True, methods=['post'])
+    def publish(self, request, pk=None):
+        """
+        POST /api/curriculum/units/<id>/publish/
+        Une unité n'est visible par les étudiants qu'une fois publiée, et
+        seulement si au moins une de ses leçons l'est.
+        """
+        unit = self.get_object()
+        if not unit.lessons.filter(is_published=True).exists():
+            return Response(
+                {'detail': "Publication refusée : l'unité doit contenir au moins une leçon publiée."},
+                status=400,
+            )
+        unit.is_published = True
+        unit.save(update_fields=['is_published'])
+        return Response(UnitDetailSerializer(unit, context={'request': request}).data)
+
     @action(detail=True, methods=['get'])
     def sections(self, request, pk=None):
         """
@@ -95,22 +125,29 @@ class LessonViewSet(viewsets.ModelViewSet):
             return LessonListSerializer
         return LessonDetailSerializer
 
+    @action(detail=True, methods=['get'])
+    def publication_check(self, request, pk=None):
+        """
+        GET /api/curriculum/lessons/<id>/publication_check/
+        Liste de contrôle de l'écran T9 (voir skills/publishing.py).
+        """
+        return Response(lesson_publication_checks(self.get_object()))
+
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
         """
-        Publie la leçon après vérification de la règle métier
-        (exactement 1 Goal Conceptual + 1 Goal Operational).
+        Publie la leçon si toutes les règles de publication sont respectées
+        (goals, types des skills, absence de cycle, chunks suffisants).
         """
         lesson = self.get_object()
-        c = lesson.goals.filter(goal_type=Goal.GoalType.CONCEPTUAL).count()
-        o = lesson.goals.filter(goal_type=Goal.GoalType.OPERATIONAL).count()
-        if c != 1 or o != 1:
+        result = lesson_publication_checks(lesson)
+        if not result['ready']:
             return Response(
                 {
-                    'detail': "Publication refusée : la leçon doit avoir exactement "
-                              "1 Goal Conceptual et 1 Goal Operational.",
-                    'conceptual_count': c,
-                    'operational_count': o,
+                    'detail': "Publication refusée : la leçon ne respecte pas les règles de publication.",
+                    'conceptual_count': lesson.goals.filter(goal_type=Goal.GoalType.CONCEPTUAL).count(),
+                    'operational_count': lesson.goals.filter(goal_type=Goal.GoalType.OPERATIONAL).count(),
+                    **result,
                 },
                 status=400,
             )

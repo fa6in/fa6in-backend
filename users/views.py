@@ -16,13 +16,17 @@ from .models import User, Wilaya, StudentProfile, TeacherProfile, PasswordResetC
 from .serializers import (
     UserSerializer,
     UserRegistrationSerializer,
+    AdminUserCreateSerializer,
+    AdminUserUpdateSerializer,
     WilayaSerializer,
     StudentProfileSerializer,
     TeacherProfileSerializer,
     ChangePasswordSerializer,
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
+    VerifyResetCodeSerializer,
 )
+from django.conf import settings
 from utilities.emailjs import send_password_reset_code_email
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,25 @@ class UserViewSet(viewsets.ModelViewSet):
         if user.role in (User.Role.ADMIN, User.Role.REGIONAL_ADMIN):
             return qs
         return qs.filter(id=user.id)
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return AdminUserCreateSerializer
+        if self.action in ('update', 'partial_update') \
+                and self.request.user.role in (User.Role.ADMIN, User.Role.REGIONAL_ADMIN):
+            return AdminUserUpdateSerializer
+        return UserSerializer
+
+    def get_permissions(self):
+        if self.action in ('create', 'destroy'):
+            return [permissions.IsAuthenticated(), IsAdminOrRegionalAdmin()]
+        return super().get_permissions()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(UserSerializer(user, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def me(self, request):
@@ -266,9 +289,54 @@ class ForgotPasswordView(APIView):
                 # le code reste valide même si la notification échoue.
                 logger.exception("Échec de l'envoi du code de réinitialisation à %s", user.email)
 
-        return Response(
-            {'detail': "Si cet email est associé à un compte, un code de vérification a été envoyé."}
+        return Response({
+            'detail': "Si cet email est associé à un compte, un code de vérification a été envoyé.",
+            'expires_in_minutes': getattr(settings, 'PASSWORD_RESET_CODE_VALIDITY_MINUTES', 10),
+            'max_attempts': getattr(settings, 'PASSWORD_RESET_CODE_MAX_ATTEMPTS', 5),
+        })
+
+
+class VerifyResetCodeView(APIView):
+    """
+    POST /api/auth/verify-reset-code/  {email, code}
+    Étape 2/3 du flux "نسيت كلمة المرور" : vérifie le code sans changer le
+    mot de passe. Chaque code erroné consomme une tentative.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = VerifyResetCodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        max_attempts = getattr(settings, 'PASSWORD_RESET_CODE_MAX_ATTEMPTS', 5)
+
+        user = User.objects.filter(email__iexact=data['email']).first()
+        reset_code = (
+            user.password_reset_codes.filter(is_used=False).order_by('-created_at').first()
+            if user else None
         )
+        if reset_code is None or not reset_code.is_valid():
+            return Response(
+                {'detail': "Code invalide ou expiré.", 'remaining_attempts': 0},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if reset_code.code != data['code']:
+            reset_code.attempts += 1
+            reset_code.save(update_fields=['attempts'])
+            return Response(
+                {
+                    'detail': "Code invalide ou expiré.",
+                    'remaining_attempts': max(0, max_attempts - reset_code.attempts),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({
+            'valid': True,
+            'expires_at': reset_code.expires_at,
+            'remaining_attempts': max(0, max_attempts - reset_code.attempts),
+        })
 
 
 class ResetPasswordView(APIView):

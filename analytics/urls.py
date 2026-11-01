@@ -7,8 +7,11 @@ from django.urls import path
 from .views import (
     ClassDashboardView,
     StudentErrorAnalysisView,
+    ReportsAttentionView,
+    ReportsByWilayaView,
     ReportsOverviewView,
     ReportsUsageView,
+    StudentSummaryView,
     TeacherDashboardOverviewView,
     TeacherDashboardStudentsProgressView,
     TeacherDashboardUnitsPerformanceView,
@@ -20,7 +23,10 @@ urlpatterns = [
 
     # Reports (admin)
     path('reports/', ReportsOverviewView.as_view(), name='reports-overview'),
+    path('students/<int:student_id>/summary/', StudentSummaryView.as_view(), name='student-summary'),
     path('reports/usage/', ReportsUsageView.as_view(), name='reports-usage'),
+    path('reports/attention/', ReportsAttentionView.as_view(), name='reports-attention'),
+    path('reports/by-wilaya/', ReportsByWilayaView.as_view(), name='reports-by-wilaya'),
 
     # Teacher dashboard
     path('teacher-dashboard/', TeacherDashboardOverviewView.as_view(), name='teacher-dashboard'),

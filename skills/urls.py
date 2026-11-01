@@ -18,6 +18,9 @@ urlpatterns = [
     path('skills/<int:pk>/prerequisites/', SkillViewSet.as_view({
         'get': 'prerequisites'
     }), name='skill-prerequisites'),
+    path('skills/<int:pk>/prerequisite_candidates/', SkillViewSet.as_view({
+        'get': 'prerequisite_candidates'
+    }), name='skill-prerequisite-candidates'),
     path('skills/<int:pk>/publication_check/', SkillViewSet.as_view({
         'get': 'publication_check'
     }), name='skill-publication-check'),

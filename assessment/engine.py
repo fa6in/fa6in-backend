@@ -144,25 +144,32 @@ def find_prerequisite_redirect(student, skill):
     if not progress or progress.attempts < REDIRECT_MIN_ATTEMPTS or float(progress.mastery) >= REDIRECT_MASTERY_CEILING:
         return None
 
-    prereq_ids = list(Prerequisite.objects.filter(skill=skill).values_list('prerequisite_id', flat=True))
-    if not prereq_ids:
+    prereqs = list(
+        Prerequisite.objects.filter(skill=skill).select_related('prerequisite')
+        .order_by('prerequisite__order_index', 'prerequisite_id')
+    )
+    if not prereqs:
         return None
 
-    candidates = (
-        StudentProgress.objects
-        .filter(student=student, skill_id__in=prereq_ids)
-        .select_related('skill')
-        .order_by('mastery')
-    )
+    # Seuls les prérequis NON maîtrisés sont des cibles de redirection : un
+    # prérequis déjà maîtrisé renverrait l'étudiant en boucle vers une skill
+    # qu'il sait déjà. Un prérequis jamais tenté compte comme mastery 0.
+    progress_by_skill = {
+        p.skill_id: p
+        for p in StudentProgress.objects.filter(
+            student=student, skill_id__in=[p.prerequisite_id for p in prereqs],
+        )
+    }
+    candidates = []
+    for p in prereqs:
+        pre_progress = progress_by_skill.get(p.prerequisite_id)
+        if pre_progress and pre_progress.status == StudentProgress.Status.MASTERED:
+            continue
+        candidates.append((float(pre_progress.mastery) if pre_progress else 0.0, p.prerequisite))
+    if not candidates:
+        return None
 
-    if candidates.exists():
-        weakest_progress = candidates.first()
-        weakest_skill = weakest_progress.skill
-        weakest_mastery = float(weakest_progress.mastery)
-    else:
-        from skills.models import Skill
-        weakest_skill = Skill.objects.get(pk=prereq_ids[0])
-        weakest_mastery = 0.0
+    weakest_mastery, weakest_skill = min(candidates, key=lambda c: c[0])
 
     chunk = weakest_skill.chunks.filter(chunk_type=Chunk.ChunkType.RULE).order_by('order_index').first()
 

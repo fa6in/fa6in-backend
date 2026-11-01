@@ -13,6 +13,7 @@ from .views import (
     LogoutView,
     ForgotPasswordView,
     ResetPasswordView,
+    VerifyResetCodeView,
     AdminStudentListView,
     AdminStudentDetailView,
     AdminTeacherListView,
@@ -27,6 +28,7 @@ urlpatterns = [
     path('me/', MeView.as_view(), name='me'),
     path('profile/', ProfileView.as_view(), name='profile'),
     path('forgot-password/', ForgotPasswordView.as_view(), name='forgot-password'),
+    path('verify-reset-code/', VerifyResetCodeView.as_view(), name='verify-reset-code'),
     path('reset-password/', ResetPasswordView.as_view(), name='reset-password'),
 
     # Users

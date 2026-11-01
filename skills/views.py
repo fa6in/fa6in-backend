@@ -2,7 +2,7 @@
 skills/views.py
 """
 
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -20,7 +20,7 @@ from .serializers import (
 class SkillViewSet(viewsets.ModelViewSet):
     queryset = Skill.objects.select_related('goal').prefetch_related('chunks', 'prerequisites_required').all()
     permission_classes = [IsTeacherOrAdminOrReadOnly]
-    filterset_fields = ['goal', 'skill_type', 'difficulty']
+    filterset_fields = ['goal', 'goal__lesson', 'goal__lesson__unit', 'skill_type', 'difficulty']
     search_fields = ['code', 'name']
 
     def get_serializer_class(self):
@@ -49,16 +49,64 @@ class SkillViewSet(viewsets.ModelViewSet):
         return Response({'ready': ready, 'chunk_counts': counts})
 
 
+    @action(detail=True, methods=['get'])
+    def prerequisite_candidates(self, request, pk=None):
+        """
+        GET /api/skills/skills/<id>/prerequisite_candidates/?search=
+        Écran T7 : skills proposables comme prérequis, avec leur état :
+        - 'available' : peut être ajoutée ;
+        - 'linked'    : déjà prérequis de cette skill ;
+        - 'cycle'     : l'ajouter créerait un cycle -> interdit.
+        """
+        skill = self.get_object()
+
+        # Skills qui dépendent (transitivement) de `skill` : en faire un
+        # prérequis de `skill` fermerait la boucle.
+        dependents, frontier = set(), [skill.id]
+        while frontier:
+            current = frontier.pop()
+            for dep_id in Prerequisite.objects.filter(prerequisite_id=current).values_list('skill_id', flat=True):
+                if dep_id not in dependents:
+                    dependents.add(dep_id)
+                    frontier.append(dep_id)
+        linked = set(skill.prerequisites_required.values_list('prerequisite_id', flat=True))
+
+        qs = Skill.objects.exclude(pk=skill.pk).select_related('goal__lesson__unit')
+        search = request.query_params.get('search')
+        if search:
+            qs = qs.filter(Q(name__icontains=search) | Q(code__icontains=search))
+        qs = qs.order_by('goal__lesson__unit__order_index', 'goal__lesson__order_index', 'order_index')[:50]
+
+        def state(candidate_id):
+            if candidate_id in linked:
+                return 'linked'
+            if candidate_id in dependents:
+                return 'cycle'
+            return 'available'
+
+        return Response([
+            {
+                'id': c.id,
+                'code': c.code,
+                'name': c.name,
+                'skill_type': c.skill_type,
+                'lesson_code': c.goal.lesson.code,
+                'state': state(c.id),
+            }
+            for c in qs
+        ])
+
+
 class PrerequisiteViewSet(viewsets.ModelViewSet):
     queryset = Prerequisite.objects.select_related('skill', 'prerequisite').all()
     serializer_class = PrerequisiteSerializer
     permission_classes = [IsTeacherOrAdminOrReadOnly]
-    filterset_fields = ['skill', 'prerequisite']
+    filterset_fields = ['skill', 'prerequisite', 'skill__goal__lesson']
 
 
 class ChunkViewSet(viewsets.ModelViewSet):
     queryset = Chunk.objects.select_related('skill').all()
     serializer_class = ChunkSerializer
     permission_classes = [IsTeacherOrAdminOrReadOnly]
-    filterset_fields = ['skill', 'chunk_type', 'difficulty']
+    filterset_fields = ['skill', 'skill__goal__lesson', 'chunk_type', 'difficulty']
     search_fields = ['code', 'title', 'content']

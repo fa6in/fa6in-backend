@@ -49,7 +49,7 @@ class CurriculumScenarioTestCase(APITestCase):
         self.assertEqual(unit_resp.status_code, status.HTTP_201_CREATED, unit_resp.data)
         unit_id = unit_resp.data['id']
 
-        self.assertEqual(unit_resp.data['created_by'], self.teacher.id)
+        self.assertEqual(unit_resp.data['created_by']['id'], self.teacher.id)
         self.assertFalse(unit_resp.data['is_published'])
 
         lesson_resp = self.client.post(reverse('lesson-list'), {
@@ -107,9 +107,24 @@ class LessonPublishRuleTestCase(APITestCase):
         self.assertEqual(resp.data['conceptual_count'], 1)
         self.assertEqual(resp.data['operational_count'], 0)
 
-    def test_publish_succeeds_with_exactly_one_of_each_goal(self):
+    def test_publish_rejected_when_goals_have_no_skills(self):
         Goal.objects.create(lesson=self.lesson, goal_type=Goal.GoalType.CONCEPTUAL, title='فهم الكسور')
         Goal.objects.create(lesson=self.lesson, goal_type=Goal.GoalType.OPERATIONAL, title='تطبيق الكسور')
+
+        resp = self._publish()
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        checks = {c['key']: c['ok'] for c in resp.data['checks']}
+        self.assertTrue(checks['goals'])
+        self.assertFalse(checks['skill_types'])
+
+    def test_publish_succeeds_with_exactly_one_of_each_goal(self):
+        from skills.models import Skill, Chunk
+        for goal_type, title in ((Goal.GoalType.CONCEPTUAL, 'فهم الكسور'), (Goal.GoalType.OPERATIONAL, 'تطبيق الكسور')):
+            goal = Goal.objects.create(lesson=self.lesson, goal_type=goal_type, title=title)
+            skill = Skill.objects.create(goal=goal, code=f'SK-{goal_type}', name=title, skill_type=goal_type)
+            for i, chunk_type in enumerate(('rule', 'example', 'practice', 'practice')):
+                Chunk.objects.create(skill=skill, code=f'CH-{goal_type}-{i}', chunk_type=chunk_type,
+                                     content='...', correct_answer='1' if chunk_type == 'practice' else None)
 
         resp = self._publish()
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)

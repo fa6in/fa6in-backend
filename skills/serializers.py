@@ -116,8 +116,9 @@ class SkillListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Skill
         fields = [
-            'id', 'code', 'name', 'skill_type', 'goal', 'goal_type',
-            'difficulty', 'order_index', 'chunks_ready',
+            'id', 'code', 'name', 'description', 'skill_type', 'goal', 'goal_type',
+            'difficulty', 'mastery_threshold', 'required_consecutive_correct',
+            'order_index', 'chunks_ready',
         ]
 
     def get_chunks_ready(self, obj):

@@ -40,6 +40,9 @@ urlpatterns = [
         'patch': 'partial_update',
         'delete': 'destroy'
     }), name='unit-detail'),
+    path('units/<int:pk>/publish/', UnitViewSet.as_view({
+        'post': 'publish'
+    }), name='unit-publish'),
     path('units/<int:pk>/sections/', UnitViewSet.as_view({
         'get': 'sections'
     }), name='unit-sections'),
@@ -55,6 +58,9 @@ urlpatterns = [
         'patch': 'partial_update',
         'delete': 'destroy'
     }), name='lesson-detail'),
+    path('lessons/<int:pk>/publication_check/', LessonViewSet.as_view({
+        'get': 'publication_check'
+    }), name='lesson-publication-check'),
     path('lessons/<int:pk>/publish/', LessonViewSet.as_view({
         'post': 'publish'
     }), name='lesson-publish'),
