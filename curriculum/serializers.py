@@ -80,6 +80,7 @@ class UnitDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'code', 'title', 'description', 'subject', 'subject_name',
             'main_goal_description', 'central_question', 'main_skill_domain',
+            'term', 'competency_ref',
             'order_index', 'is_published', 'thumbnail', 'created_by',
             'created_by_username', 'created_at',
         ]
@@ -151,7 +152,8 @@ class LessonDetailSerializer(serializers.ModelSerializer):
         model = Lesson
         fields = [
             'id', 'code', 'title', 'description', 'unit', 'unit_title',
-            'order_index', 'is_published', 'created_at', 'goals',
+            'order_index', 'programme_ref', 'week', 'programme_weeks', 'book_exercises',
+            'is_published', 'created_at', 'goals',
         ]
         read_only_fields = ['created_at']
 

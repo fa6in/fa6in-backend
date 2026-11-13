@@ -21,9 +21,30 @@ class ChunkSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'skill', 'code', 'chunk_type', 'title', 'content',
             'correct_answer', 'options', 'difficulty', 'order_index',
-            'points', 'time_limit', 'created_at', 'updated_at',
+            'points', 'time_limit', 'image', 'needs_image', 'image_note',
+            'created_at', 'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+    def validate_options(self, value):
+        """
+        Chaque option est soit un texte simple, soit un objet riche
+        {id, text, is_correct, error_category, feedback} conservé tel quel.
+        """
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("options doit être une liste.")
+        for index, option in enumerate(value):
+            if isinstance(option, str):
+                continue
+            if not isinstance(option, dict) or not isinstance(option.get('text'), str):
+                raise serializers.ValidationError(
+                    f"Option {index} : un texte ou un objet avec un champ 'text' est attendu."
+                )
+            if 'is_correct' in option and not isinstance(option['is_correct'], bool):
+                raise serializers.ValidationError(f"Option {index} : 'is_correct' doit être un booléen.")
+        return value
 
     def validate(self, attrs):
         chunk_type = attrs.get('chunk_type') or getattr(self.instance, 'chunk_type', None)
@@ -39,6 +60,8 @@ class ChunkSerializer(serializers.ModelSerializer):
         Sécurité (Revue API, Problème 1) : un étudiant qui inspecte les
         appels réseau ne doit jamais pouvoir lire correct_answer. Seuls
         les enseignants/admins qui gèrent le contenu y ont accès.
+        Pour la même raison, les options riches sont réduites à leur
+        texte (is_correct, error_category et feedback restent côté serveur).
         """
         data = super().to_representation(instance)
 
@@ -53,6 +76,10 @@ class ChunkSerializer(serializers.ModelSerializer):
         )
         if not is_staff_role:
             data.pop('correct_answer', None)
+            data['options'] = [
+                option['text'] if isinstance(option, dict) else option
+                for option in data.get('options') or []
+            ]
         return data
 
 

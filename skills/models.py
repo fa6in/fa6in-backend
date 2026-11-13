@@ -215,6 +215,18 @@ class Chunk(models.Model):
     order_index = models.IntegerField(_('ترتيب العرض المقترح'), default=0)
     points = models.IntegerField(_('النقاط'), default=1)
     time_limit = models.IntegerField(_('الحد الزمني بالثواني'), null=True, blank=True)
+    image = models.ImageField(
+        _('الصورة'), upload_to='chunks/', null=True, blank=True,
+        db_comment="Illustration du manuel - fait souvent partie de la question",
+    )
+    needs_image = models.BooleanField(
+        _('يحتاج إلى صورة'), default=False,
+        db_comment="Métadonnée de relecture : le chunk n'a pas de sens sans image",
+    )
+    image_note = models.TextField(
+        _('ملاحظة الصورة'), blank=True, null=True,
+        db_comment="Métadonnée de relecture : description de l'image attendue",
+    )
     created_at = models.DateTimeField(_('تاريخ الإنشاء'), auto_now_add=True)
     updated_at = models.DateTimeField(_('تاريخ التحديث'), auto_now=True)
 

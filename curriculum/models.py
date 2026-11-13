@@ -132,6 +132,14 @@ class Unit(models.Model):
         db_comment="Question centrale qui guide l'apprentissage",
     )
     main_skill_domain = models.CharField(_('مجال الكفاءة الرئيسي'), max_length=200, blank=True)
+    term = models.CharField(
+        _('الفصل الدراسي'), max_length=50, blank=True, default='',
+        db_comment="Trimestre / période du programme (import)",
+    )
+    competency_ref = models.CharField(
+        _('مرجع الكفاية'), max_length=100, blank=True, default='',
+        db_comment="Référence de la compétence dans le programme officiel (import)",
+    )
     order_index = models.IntegerField(_('الترتيب'), default=0)
     is_published = models.BooleanField(_('منشورة'), default=False)
     thumbnail = models.ImageField(_('الصورة المصغرة'), upload_to='units/', null=True, blank=True)
@@ -163,6 +171,22 @@ class Lesson(models.Model):
     title = models.CharField(_('عنوان الدرس'), max_length=255)
     description = models.TextField(_('الوصف'), blank=True, null=True)
     order_index = models.IntegerField(_('الترتيب داخل الوحدة'), default=0)
+    programme_ref = models.CharField(
+        _('مرجع البرنامج'), max_length=100, blank=True, default='',
+        db_comment="Référence de la leçon dans le programme officiel (import)",
+    )
+    week = models.PositiveSmallIntegerField(
+        _('الأسبوع'), null=True, blank=True,
+        db_comment="Semaine du programme où la leçon est enseignée (import)",
+    )
+    programme_weeks = models.JSONField(
+        _('أسابيع البرنامج'), default=list, blank=True,
+        db_comment="Semaines du programme couvertes par la leçon (import)",
+    )
+    book_exercises = models.JSONField(
+        _('تمارين الكتاب'), default=list, blank=True,
+        db_comment="Exercices du manuel associés à la leçon (import)",
+    )
     is_published = models.BooleanField(_('منشور'), default=False)
     created_at = models.DateTimeField(_('تاريخ الإنشاء'), auto_now_add=True)
 
