@@ -57,6 +57,41 @@ class CurriculumScenarioTestCase(APITestCase):
         })
         self.assertEqual(lesson_resp.status_code, status.HTTP_201_CREATED, lesson_resp.data)
 
+    def test_teacher_creates_units_in_bulk(self):
+        self.client.force_authenticate(self.teacher)
+        resp = self.client.post(reverse('unit-list'), [
+            {'subject': self.subject.id, 'code': 'U01', 'title': 'الكسور', 'order_index': 1},
+            {'subject': self.subject.id, 'code': 'U02', 'title': 'الأعداد العشرية', 'order_index': 2},
+        ], format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        self.assertEqual([u['code'] for u in resp.data], ['U01', 'U02'])
+        self.assertEqual(resp.data[1]['created_by']['id'], self.teacher.id)
+        self.assertEqual(Unit.objects.count(), 2)
+
+    def test_bulk_unit_create_is_all_or_nothing(self):
+        self.client.force_authenticate(self.teacher)
+        # Deuxième unité invalide (titre manquant) -> rien n'est créé.
+        resp = self.client.post(reverse('unit-list'), [
+            {'subject': self.subject.id, 'code': 'U01', 'title': 'الكسور'},
+            {'subject': self.subject.id, 'code': 'U02'},
+        ], format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data[0], {})
+        self.assertIn('title', resp.data[1])
+
+        # Code en double dans la liste.
+        resp = self.client.post(reverse('unit-list'), [
+            {'subject': self.subject.id, 'code': 'U01', 'title': 'أ'},
+            {'subject': self.subject.id, 'code': 'U01', 'title': 'ب'},
+        ], format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['duplicates'], ['U01'])
+
+        # Liste vide.
+        resp = self.client.post(reverse('unit-list'), [], format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Unit.objects.count(), 0)
+
     def test_student_has_read_only_access(self):
         self.client.force_authenticate(self.student)
 

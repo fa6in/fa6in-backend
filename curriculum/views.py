@@ -2,7 +2,8 @@
 curriculum/views.py
 """
 
-from rest_framework import viewsets, permissions
+from django.db import transaction
+from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -82,6 +83,38 @@ class UnitViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return UnitListSerializer
         return UnitDetailSerializer
+
+    def create(self, request, *args, **kwargs):
+        """
+        POST /api/curriculum/units/
+
+        Le body peut être un objet (une unité) ou une liste d'objets
+        (création en lot). En lot, tout est créé dans une seule transaction :
+        si une unité est invalide, aucune n'est créée et la réponse 400
+        contient les erreurs dans le même ordre que la liste envoyée.
+        """
+        if not isinstance(request.data, list):
+            return super().create(request, *args, **kwargs)
+
+        if not request.data:
+            return Response({'detail': "La liste des unités est vide."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=request.data, many=True)
+        serializer.is_valid(raise_exception=True)
+
+        # Le validateur d'unicité ne voit que la base : on vérifie aussi les
+        # doublons de `code` à l'intérieur de la liste envoyée.
+        codes = [item.get('code') for item in serializer.validated_data]
+        duplicates = sorted({c for c in codes if codes.count(c) > 1})
+        if duplicates:
+            return Response(
+                {'detail': "Codes en double dans la liste.", 'duplicates': duplicates},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            serializer.save(created_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
