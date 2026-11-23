@@ -10,14 +10,18 @@ reconstituée côté Frontend :
                        (avec gestion des équivalences mathématiques simples)
 - classify_error     : classifie une erreur en CONCEPT / PROCEDURE / CARELESS
 - pick_error_detail  : cherche l'entrée du catalogue Error correspondante
-- pick_next_chunk    : Decision Engine "interne à la skill" (Problème 2)
+- pick_next_chunk    : Decision Engine "interne à la skill" (Problème 2),
+                       organisé en séries d'exercices avec reprise des erreurs
+- record_round_answer: met à jour la série après une réponse
 - find_prerequisite_redirect : Decision Engine "backtracking pédagogique" (Problème 3)
 """
 
 from fractions import Fraction
 
+from curriculum.models import AcademicYear
 from skills.models import Chunk, Prerequisite
 from .models import ErrorCategory, Error, StudentProgress
+from .path import skill_is_open
 
 REDIRECT_MIN_ATTEMPTS = 3
 REDIRECT_MASTERY_CEILING = 0.5
@@ -78,58 +82,161 @@ def pick_error_detail(skill_id, category: str):
     return Error.objects.filter(skill_id=skill_id, category=category).order_by('id').first()
 
 
+REVIEW_MAX_RETRIES = 2
+
+
+def _practice_ids(skill):
+    return set(skill.chunks.filter(chunk_type=Chunk.ChunkType.PRACTICE).values_list('id', flat=True))
+
+
+def _round_exercises(skill, progress: StudentProgress):
+    """
+    Exercices d'une nouvelle série, choisis selon le niveau de maîtrise :
+    faciles (difficulty <= 2) tant que la skill n'est pas maîtrisée,
+    avancés (difficulty >= 3) ensuite. Si aucun exercice ne correspond,
+    on prend tous les exercices de la skill.
+    """
+    practice = skill.chunks.filter(chunk_type=Chunk.ChunkType.PRACTICE)
+    if progress.attempts < 3:
+        reason = "Phase de diagnostic (< 3 tentatives) : série d'exercices faciles"
+        qs = practice.filter(difficulty__lte=2)
+    elif float(progress.mastery) < float(skill.mastery_threshold):
+        reason = "Série de renforcement (mastery intermédiaire)"
+        qs = practice.filter(difficulty__lte=2)
+    else:
+        reason = "Série d'exercices avancés (mastery élevé)"
+        qs = practice.filter(difficulty__gte=3)
+    if not qs.exists():
+        qs = practice
+    return list(qs.order_by('order_index', 'id').values_list('id', flat=True)), reason
+
+
+def _clean_round(skill, progress: StudentProgress):
+    """Retire de la série les chunks supprimés / qui ne sont plus des exercices."""
+    valid = _practice_ids(skill)
+    queue = [cid for cid in (progress.round_queue or []) if cid in valid]
+    mistakes = [m for m in (progress.round_mistakes or []) if m.get('chunk_id') in valid]
+    if queue != (progress.round_queue or []) or mistakes != (progress.round_mistakes or []):
+        progress.round_queue, progress.round_mistakes = queue, mistakes
+        progress.save(update_fields=['round_queue', 'round_mistakes'])
+
+
+def round_state(progress: StudentProgress):
+    """
+    Résumé de la série en cours, renvoyé au Frontend :
+    phase = 'practice' (exercices de la série), 'review' (reprise des
+    exercices ratés) ou None (aucune série en cours).
+    """
+    queue = progress.round_queue or []
+    mistakes = progress.round_mistakes or []
+    phase = 'practice' if queue else ('review' if mistakes else None)
+    return {
+        'phase': phase,
+        'remaining': len(queue),
+        'to_review': len(mistakes),
+        'mistakes': [m['chunk_id'] for m in mistakes],
+    }
+
+
+def in_round_practice(progress: StudentProgress) -> bool:
+    """Vrai tant que l'étudiant n'a pas fini les exercices de la série."""
+    return bool(progress.round_queue)
+
+
 def pick_next_chunk(skill, progress: StudentProgress, exclude_chunk_id=None):
     """
     Decision Engine - Problème 2 (Section 9.1/9.2 du cahier des charges).
 
-    Retourne (chunk, reason) ou (None, reason) si aucun chunk ne correspond.
+    Retourne un dict {chunk, reason, mode, mistake} :
+    - mode 'learn'    : onboarding (règle puis exemple, une seule fois) ;
+    - mode 'practice' : exercice suivant de la série. Une erreur ne bloque
+                        PAS l'étudiant : il passe à l'exercice suivant ;
+    - mode 'review'   : la série est terminée, on revient sur un exercice
+                        raté ; `mistake` porte la catégorie d'erreur pour
+                        afficher le feedback (règle / exemple) avant de le
+                        refaire.
+    Une nouvelle série démarre automatiquement quand la précédente (et
+    ses reprises) est terminée.
     """
     chunks = skill.chunks.all()
-    mastery = float(progress.mastery)
 
-    if progress.last_error_type == ErrorCategory.CONCEPT:
-        candidate_type, reason = Chunk.ChunkType.RULE, "Retour à la règle car dernière erreur = concept"
-        qs = chunks.filter(chunk_type=candidate_type)
-    elif progress.last_error_type == ErrorCategory.PROCEDURE:
-        candidate_type, reason = Chunk.ChunkType.EXAMPLE, "Retour à un exemple car dernière erreur = procedure"
-        qs = chunks.filter(chunk_type=candidate_type)
-    elif not progress.rule_seen:
-        # Onboarding, étape 1/2 : l'étudiant n'a JAMAIS vu la règle de
-        # cette skill (peu importe son mastery, toujours à 0.00 à ce
-        # stade). C'est next-action qui décide de la montrer, pas le
-        # Frontend -> respecte le principe "Backend = cerveau de FATIN".
-        reason = "Première visite : découverte de la règle"
-        qs = chunks.filter(chunk_type=Chunk.ChunkType.RULE)
-    elif not progress.example_seen:
-        # Onboarding, étape 2/2 : la règle a été vue mais pas l'exemple.
-        reason = "Première visite : découverte de l'exemple"
-        qs = chunks.filter(chunk_type=Chunk.ChunkType.EXAMPLE)
-    elif progress.attempts < 3:
-        # Phase de diagnostic : mastery vaut TOUJOURS 0.00 tant que
-        # attempts < 3 (register_attempt, règle 6 - "non fiable"), donc on
-        # ne s'y fie pas encore. L'onboarding (rule/example) étant terminé,
-        # on fait pratiquer directement sur un exercice facile.
-        reason = "Phase de diagnostic (< 3 tentatives) : exercice facile"
-        qs = chunks.filter(chunk_type=Chunk.ChunkType.PRACTICE, difficulty__lte=2)
-    elif mastery < 0.5:
-        reason = "Rappel de la règle (mastery < 0.5)"
-        qs = chunks.filter(chunk_type=Chunk.ChunkType.RULE)
-    elif mastery < float(skill.mastery_threshold):
-        reason = "Exercice de renforcement (mastery intermédiaire)"
-        qs = chunks.filter(chunk_type=Chunk.ChunkType.PRACTICE, difficulty__lte=2)
-    else:
-        reason = "Exercice avancé (mastery élevé)"
-        qs = chunks.filter(chunk_type=Chunk.ChunkType.PRACTICE, difficulty__gte=3)
+    if not progress.rule_seen:
+        chunk = chunks.filter(chunk_type=Chunk.ChunkType.RULE).order_by('order_index').first()
+        if chunk:
+            return {'chunk': chunk, 'reason': "Première visite : découverte de la règle",
+                    'mode': 'learn', 'mistake': None}
+    if not progress.example_seen:
+        chunk = chunks.filter(chunk_type=Chunk.ChunkType.EXAMPLE).order_by('order_index').first()
+        if chunk:
+            return {'chunk': chunk, 'reason': "Première visite : découverte de l'exemple",
+                    'mode': 'learn', 'mistake': None}
 
-    qs = qs.order_by('order_index')
+    _clean_round(skill, progress)
+    reason = "Suite de la série d'exercices"
+    if not progress.round_queue and not progress.round_mistakes:
+        queue, reason = _round_exercises(skill, progress)
+        # Évite de reproposer immédiatement le dernier exercice répondu.
+        if exclude_chunk_id in queue and len(queue) > 1:
+            queue.remove(exclude_chunk_id)
+            queue.append(exclude_chunk_id)
+        progress.round_queue, progress.round_mistakes = queue, []
+        progress.save(update_fields=['round_queue', 'round_mistakes'])
 
-    if exclude_chunk_id is not None:
-        not_recent = qs.exclude(pk=exclude_chunk_id)
-        if not_recent.exists():
-            return not_recent.first(), reason
+    if progress.round_queue:
+        chunk = chunks.filter(pk=progress.round_queue[0]).first()
+        return {'chunk': chunk, 'reason': reason, 'mode': 'practice', 'mistake': None}
 
-    chunk = qs.first()
-    return chunk, reason
+    if progress.round_mistakes:
+        mistake = progress.round_mistakes[0]
+        chunk = chunks.filter(pk=mistake['chunk_id']).first()
+        return {
+            'chunk': chunk,
+            'reason': "Fin de la série : reprise d'un exercice raté avec son feedback",
+            'mode': 'review',
+            'mistake': mistake,
+        }
+
+    return {'chunk': None, 'reason': "Aucun exercice disponible pour cette skill",
+            'mode': 'practice', 'mistake': None}
+
+
+def record_round_answer(progress: StudentProgress, chunk: Chunk, is_correct: bool, error_type=None):
+    """
+    Met à jour la série après une réponse.
+
+    - Exercice de la série : il sort de la file ; s'il est faux, il est
+      noté dans round_mistakes pour être repris en fin de série.
+      L'étudiant passe à l'exercice suivant dans tous les cas.
+    - Reprise d'un exercice raté : juste -> retiré des erreurs ; faux ->
+      remis en fin de liste (au plus REVIEW_MAX_RETRIES reprises, pour ne
+      jamais bloquer l'étudiant sur le même exercice).
+    Retourne le mode de la réponse : 'practice', 'review' ou None (hors série).
+    """
+    queue = list(progress.round_queue or [])
+    mistakes = [dict(m) for m in (progress.round_mistakes or [])]
+    idx = next((i for i, m in enumerate(mistakes) if m.get('chunk_id') == chunk.id), None)
+
+    mode = None
+    if chunk.id in queue:
+        mode = 'practice'
+        queue.remove(chunk.id)
+        if not is_correct:
+            if idx is None:
+                mistakes.append({'chunk_id': chunk.id, 'error_type': error_type, 'retries': 0})
+            else:
+                mistakes[idx]['error_type'] = error_type
+    elif idx is not None:
+        mode = 'review'
+        entry = mistakes.pop(idx)
+        if not is_correct:
+            entry['retries'] = entry.get('retries', 0) + 1
+            entry['error_type'] = error_type
+            if entry['retries'] < REVIEW_MAX_RETRIES:
+                mistakes.append(entry)
+
+    progress.round_queue, progress.round_mistakes = queue, mistakes
+    progress.save(update_fields=['round_queue', 'round_mistakes'])
+    return mode
 
 
 def find_prerequisite_redirect(student, skill):
@@ -144,10 +251,13 @@ def find_prerequisite_redirect(student, skill):
     if not progress or progress.attempts < REDIRECT_MIN_ATTEMPTS or float(progress.mastery) >= REDIRECT_MASTERY_CEILING:
         return None
 
-    prereqs = list(
-        Prerequisite.objects.filter(skill=skill).select_related('prerequisite')
+    week = AcademicYear.current_week()
+    prereqs = [
+        p for p in Prerequisite.objects.filter(skill=skill)
+        .select_related('prerequisite__goal__lesson')
         .order_by('prerequisite__order_index', 'prerequisite_id')
-    )
+        if skill_is_open(p.prerequisite, week)
+    ]
     if not prereqs:
         return None
 

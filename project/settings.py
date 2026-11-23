@@ -457,3 +457,8 @@ LANGUAGES = [
 LOCALE_PATHS = [
     os.path.join(BASE_DIR, 'locale'),
 ]
+
+# Calendrier scolaire : date (YYYY-MM-DD) de début de la semaine 1 du
+# programme, utilisée si aucune AcademicYear "courante" n'existe en base.
+# Les leçons s'ouvrent selon Lesson.week <= semaine courante.
+SCHOOL_YEAR_START = os.environ.get('SCHOOL_YEAR_START') or None

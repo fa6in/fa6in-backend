@@ -5,7 +5,7 @@ curriculum/admin.py
 from django.contrib import admin
 from django.utils.translation import gettext_lazy as _
 
-from .models import Stage, Level, Subject, Unit, Lesson, Goal
+from .models import Stage, Level, Subject, Unit, Lesson, Goal, AcademicYear
 
 
 @admin.register(Stage)
@@ -76,3 +76,14 @@ class GoalAdmin(admin.ModelAdmin):
     list_filter = ('goal_type', 'lesson__unit__subject')
     search_fields = ('title', 'lesson__title')
     autocomplete_fields = ('lesson',)
+
+
+@admin.register(AcademicYear)
+class AcademicYearAdmin(admin.ModelAdmin):
+    list_display = ('name', 'start_date', 'is_current', 'current_week_display')
+    list_filter = ('is_current',)
+
+    @admin.display(description=_('الأسبوع الحالي'))
+    def current_week_display(self, obj):
+        from django.utils import timezone
+        return obj.week_of(timezone.localdate())

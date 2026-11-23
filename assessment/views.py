@@ -14,7 +14,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from curriculum.models import Unit
+from curriculum.models import AcademicYear, Unit
 from curriculum.views import IsTeacherOrAdminOrReadOnly
 from skills.models import Skill, Prerequisite, Chunk
 from skills.serializers import ChunkSerializer
@@ -54,6 +54,51 @@ DEFAULT_ERROR_FEEDBACK = {
     ErrorCategory.PROCEDURE: "فهمت الفكرة لكن خطوات الحل غير صحيحة. راجع المثال خطوة بخطوة.",
     ErrorCategory.CARELESS: "أجبت بسرعة كبيرة. خذ وقتك وتحقق من إجابتك قبل الإرسال.",
 }
+
+
+# Message immédiat quand l'exercice est faux pendant la série : l'étudiant
+# continue, l'exercice sera repris (avec son feedback) en fin de série.
+REVIEW_LATER_MESSAGE = "إجابة غير صحيحة. تابع بقية التمارين، وسنعود إلى هذا التمرين في نهاية السلسلة."
+
+
+def _build_feedback(skill, error_type, error_detail=None):
+    """Fiche d'erreur (écran S5) : message + règle + exemple de la skill."""
+    if error_detail is None and error_type:
+        error_detail = engine.pick_error_detail(skill.id, error_type)
+    example = skill.chunks.filter(chunk_type=Chunk.ChunkType.EXAMPLE).order_by('order_index').first()
+    rule = skill.chunks.filter(chunk_type=Chunk.ChunkType.RULE).order_by('order_index').first()
+    return {
+        'category': error_type,
+        'message': (
+            (error_detail.feedback_message or error_detail.root_cause) if error_detail
+            else DEFAULT_ERROR_FEEDBACK.get(error_type)
+        ),
+        'example': example.content if example else None,
+        'rule': rule.content if rule else None,
+    }
+
+
+def _locked_skill_response(request, skill):
+    """
+    403 si la leçon de la skill n'est pas encore ouverte (semaine du
+    programme pas encore atteinte). Les enseignants/admins ne sont pas
+    concernés (prévisualisation du contenu).
+    """
+    staff_roles = (User.Role.ADMIN, User.Role.REGIONAL_ADMIN, User.Role.TEACHER)
+    if request.user.role in staff_roles:
+        return None
+    week = AcademicYear.current_week()
+    if student_path.skill_is_open(skill, week):
+        return None
+    return Response(
+        {
+            'detail': "Cette leçon n'est pas encore ouverte.",
+            'code': 'lesson_locked',
+            'opens_week': student_path.lesson_week(skill.goal.lesson),
+            'current_week': week,
+        },
+        status=status.HTTP_403_FORBIDDEN,
+    )
 
 
 def _session_context(skill, progress):
@@ -96,6 +141,7 @@ def _session_context(skill, progress):
             'rule_seen': progress.rule_seen,
             'example_seen': progress.example_seen,
         },
+        'round': engine.round_state(progress),
         'chunk_counts': counts,
         'hint': hint.content if hint else None,
     }
@@ -245,6 +291,9 @@ class SubmitAnswerView(APIView):
             )
 
         skill = chunk.skill
+        locked = _locked_skill_response(request, skill)
+        if locked is not None:
+            return locked
         progress, _created = StudentProgress.objects.get_or_create(student=student, skill=skill)
 
         is_correct = engine.evaluate_answer(chunk, answer)
@@ -265,24 +314,24 @@ class SubmitAnswerView(APIView):
         progress.register_attempt(is_correct=is_correct, error_category=error_type)
         mastered_now = not was_mastered and progress.status == StudentProgress.Status.MASTERED
 
+        # Série d'exercices : une erreur ne bloque pas l'étudiant, il passe
+        # à l'exercice suivant ; l'exercice raté est repris en fin de série.
+        answer_mode = engine.record_round_answer(progress, chunk, is_correct, error_type)
+        still_in_round = engine.in_round_practice(progress)
+
         # Écran S5 (fiche d'erreur) : explication + exemple de la skill.
         feedback = None
         if not is_correct:
-            example = skill.chunks.filter(chunk_type=Chunk.ChunkType.EXAMPLE).order_by('order_index').first()
-            rule = skill.chunks.filter(chunk_type=Chunk.ChunkType.RULE).order_by('order_index').first()
-            feedback = {
-                'category': error_type,
-                'message': (
-                    (error_detail.feedback_message or error_detail.root_cause) if error_detail
-                    else DEFAULT_ERROR_FEEDBACK.get(error_type)
-                ),
-                'example': example.content if example else None,
-                'rule': rule.content if rule else None,
-            }
+            feedback = _build_feedback(skill, error_type, error_detail)
+            feedback['review_later'] = still_in_round or bool(progress.round_mistakes)
+            if feedback['review_later']:
+                feedback['short_message'] = REVIEW_LATER_MESSAGE
 
-        # Écran S6 : bloqué (>= 3 tentatives, mastery < 0.5) -> prérequis à revoir.
+        # Écran S6 : bloqué (>= 3 tentatives, mastery < 0.5) -> prérequis à
+        # revoir. Jamais au milieu d'une série : l'étudiant termine d'abord
+        # les exercices de la série.
         redirect = None
-        if not is_correct:
+        if not is_correct and not still_in_round:
             found = engine.find_prerequisite_redirect(student, skill)
             if found is not None:
                 redirect = {
@@ -330,6 +379,7 @@ class SubmitAnswerView(APIView):
             'points': points,
             'next_skill': next_skill,
             'redirect': redirect,
+            'round': {**engine.round_state(progress), 'answer_mode': answer_mode},
             'session': _session_context(skill, progress),
         })
 
@@ -352,8 +402,16 @@ class NextActionView(APIView):
         if not skill_id:
             return Response({'detail': "Le paramètre 'skill' est requis."}, status=status.HTTP_400_BAD_REQUEST)
         skill = get_object_or_404(Skill, pk=skill_id)
+        locked = _locked_skill_response(request, skill)
+        if locked is not None:
+            return locked
 
-        redirect = engine.find_prerequisite_redirect(student, skill)
+        progress, _created = StudentProgress.objects.get_or_create(student=student, skill=skill)
+
+        # Pas de redirection au milieu d'une série d'exercices.
+        redirect = None
+        if not engine.in_round_practice(progress):
+            redirect = engine.find_prerequisite_redirect(student, skill)
         if redirect is not None:
             # Même logique que ci-dessous : on sert la 'rule' du prérequis,
             # donc on marque rule_seen pour SA progression à lui (pas celle
@@ -388,7 +446,6 @@ class NextActionView(APIView):
                 'session': _session_context(redirect['new_skill'], new_skill_progress),
             })
 
-        progress, _created = StudentProgress.objects.get_or_create(student=student, skill=skill)
         last_chunk_id = (
             LogAnswer.objects
             .filter(student=student, skill=skill)
@@ -396,19 +453,13 @@ class NextActionView(APIView):
             .values_list('chunk_id', flat=True)
             .first()
         )
-        chunk, reason = engine.pick_next_chunk(skill, progress, exclude_chunk_id=last_chunk_id)
+        step = engine.pick_next_chunk(skill, progress, exclude_chunk_id=last_chunk_id)
+        chunk = step['chunk']
 
         # Le fait de SERVIR un chunk 'rule'/'example' constitue, côté
         # Backend, la preuve que l'étudiant y a été exposé (ces types ne
-        # passent jamais par /answer/, donc rien d'autre ne peut
-        # l'enregistrer). On persiste ça avant de répondre :
-        #
-        # 1. rule_seen / example_seen -> fait avancer l'onboarding
-        #    (rule -> example -> practice) sans AUCUNE logique côté
-        #    Frontend, qui reçoit juste "voici le chunk à afficher".
-        # 2. last_error_type -> remis à None une fois le rappel montré,
-        #    sinon last_error_type=='concept' bloquerait pick_next_chunk
-        #    sur RULE indéfiniment (un chunk que /answer/ refuse).
+        # passent jamais par /answer/) : on fait avancer l'onboarding
+        # (rule -> example -> série d'exercices) sans logique Frontend.
         update_fields = []
         if chunk and chunk.chunk_type == Chunk.ChunkType.RULE and not progress.rule_seen:
             progress.rule_seen = True
@@ -416,18 +467,28 @@ class NextActionView(APIView):
         if chunk and chunk.chunk_type == Chunk.ChunkType.EXAMPLE and not progress.example_seen:
             progress.example_seen = True
             update_fields.append('example_seen')
-        if progress.last_error_type and chunk and chunk.chunk_type != Chunk.ChunkType.PRACTICE:
-            progress.last_error_type = None
-            update_fields.append('last_error_type')
         if update_fields:
             progress.save(update_fields=update_fields)
 
+        # Reprise d'un exercice raté (fin de série) : on renvoie le feedback
+        # de l'erreur commise (règle / exemple / message) avec l'exercice à refaire.
+        review = None
+        if step['mode'] == 'review' and step['mistake']:
+            review = {
+                'chunk_id': step['mistake']['chunk_id'],
+                'retries': step['mistake'].get('retries', 0),
+                'feedback': _build_feedback(skill, step['mistake'].get('error_type')),
+            }
+
         return Response({
             'action': 'show_chunk',
+            'mode': step['mode'],
             'current_skill': {'id': skill.id, 'code': skill.code},
             'chunk': ChunkSerializer(chunk, context={'request': request}).data if chunk else None,
+            'review': review,
+            'round': engine.round_state(progress),
             'context': {
-                'reason': reason,
+                'reason': step['reason'],
                 'current_mastery': progress.mastery,
                 'attempts': progress.attempts,
             },

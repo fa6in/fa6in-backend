@@ -100,6 +100,17 @@ class StudentProgress(models.Model):
         _('نوع آخر خطأ'), max_length=20, choices=ErrorCategory.choices,
         null=True, blank=True,
     )
+    # Série d'exercices en cours ("round") : l'étudiant enchaîne tous les
+    # exercices de la série même s'il se trompe ; les exercices ratés sont
+    # repris à la fin de la série avec leur feedback (engine.record_round_answer).
+    round_queue = models.JSONField(
+        _('تمارين السلسلة المتبقية'), default=list, blank=True,
+        db_comment="IDs des chunks 'practice' restant à faire dans la série en cours (ordre d'affichage)",
+    )
+    round_mistakes = models.JSONField(
+        _('أخطاء السلسلة'), default=list, blank=True,
+        db_comment="Exercices ratés à reprendre en fin de série : [{chunk_id, error_type, retries}]",
+    )
     status = models.CharField(_('الحالة'), max_length=20, choices=Status.choices, default=Status.NOT_STARTED)
     started_at = models.DateTimeField(_('تاريخ البدء'), null=True, blank=True)
     mastered_at = models.DateTimeField(_('تاريخ الإتقان'), null=True, blank=True)

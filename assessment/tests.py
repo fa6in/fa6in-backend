@@ -4,20 +4,24 @@ assessment/tests.py
 Scénario du design FATIN côté étudiant (S1 → S8) et côté enseignant
 (T7, T9) :
 
-- Parcours : U01 (L01, L02) puis U02 verrouillée tant que U01 n'est pas
-  terminée ; une skill dont le prérequis de la même unité n'est pas
-  maîtrisé est verrouillée.
-- Séance : règle → exemple → exercices, fiche d'erreur, redirection vers
-  le prérequis après 3 échecs, puis "أتقنت المهارة" avec skill suivante.
+- Parcours : les leçons s'ouvrent selon leur semaine du programme (deux
+  leçons de la même semaine, même dans deux unités, sont ouvertes en même
+  temps) ; un prérequis non maîtrisé est signalé mais ne verrouille pas.
+- Séance : règle → exemple → série d'exercices ; une erreur ne bloque pas,
+  l'exercice raté est repris avec son feedback en fin de série ;
+  redirection vers le prérequis après 3 échecs, puis "أتقنت المهارة".
 - Publication : liste de contrôle d'une leçon, publication d'unité,
   candidats prérequis avec détection de cycle.
 """
 
+from datetime import timedelta
+
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from curriculum.models import Stage, Level, Subject, Unit, Lesson, Goal
+from curriculum.models import AcademicYear, Stage, Level, Subject, Unit, Lesson, Goal
 from skills.models import Skill, Prerequisite, Chunk
 from users.models import User, StudentProfile
 from .models import StudentProgress
@@ -98,34 +102,102 @@ class FatinFlowTestCase(APITestCase):
 
     # ---- S2 / S3 : parcours et verrouillage --------------------------
 
-    def test_path_locks_next_lesson_and_unit_until_mastered(self):
+    def set_week(self, week):
+        """Fixe la semaine courante du programme à `week`."""
+        AcademicYear.objects.create(
+            name='2026-2027', is_current=True,
+            start_date=timezone.localdate() - timedelta(days=7 * (week - 1)),
+        )
+
+    def test_lessons_open_by_week_not_by_completion(self):
+        # L01 (U01) et L03 (U02) sont en semaine 1, L02 (U01) en semaine 2.
+        Lesson.objects.filter(pk__in=[self.l1.pk, self.l3.pk]).update(week=1)
+        Lesson.objects.filter(pk=self.l2.pk).update(programme_weeks=[2, 3])
+        self.set_week(1)
         self.client.force_authenticate(self.student)
         data = self.client.get(self.url('student-path')).data
 
-        self.assertEqual(data['subject']['name'], 'الرياضيات')
+        self.assertEqual(data['current_week'], 1)
         u1, u2 = data['units']
-        self.assertEqual(u1['status'], 'available')
+        # Même semaine, unités différentes : les deux leçons sont ouvertes
+        # sans que U01 soit terminée.
         self.assertEqual([l['status'] for l in u1['lessons']], ['current', 'locked'])
-        self.assertEqual(u2['status'], 'locked')
-        self.assertEqual(u2['locked_by_unit']['code'], 'U01')
+        self.assertEqual(u1['lessons'][1]['week'], 2)
+        self.assertEqual(u1['next_opening_week'], 2)
+        self.assertEqual(u2['status'], 'available')
+        self.assertEqual(u2['lessons'][0]['status'], 'current')
 
-        self.master(self.s_concept)
-        self.master(self.s_repr)
+        # Une leçon de la semaine suivante reste fermée côté séance.
+        resp = self.client.get(self.url('student-next-action'), {'skill': self.s_add_same.id})
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.data['opens_week'], 2)
+
+        # Semaine 2 : L02 s'ouvre même si L01 n'est pas maîtrisée.
+        AcademicYear.objects.all().delete()
+        self.set_week(2)
         u1 = self.client.get(self.url('student-path')).data['units'][0]
-        self.assertEqual([l['status'] for l in u1['lessons']], ['done', 'current'])
-        self.assertEqual(u1['status'], 'in_progress')
+        self.assertEqual([l['status'] for l in u1['lessons']], ['current', 'current'])
 
-    def test_skill_map_locks_skill_behind_same_unit_prerequisite(self):
-        self.master(self.s_concept)
-        self.master(self.s_repr)
+    def test_prerequisite_is_reported_but_does_not_lock(self):
         self.client.force_authenticate(self.student)
         data = self.client.get(self.url('student-skill-map'), {'unit': self.u1.id}).data
 
         l2_skills = {s['code']: s for s in data['lessons'][1]['skills']}
-        self.assertEqual(l2_skills['SK-U01-L02-C01']['status'], 'available')
-        locked = l2_skills['SK-U01-L02-O01']
-        self.assertEqual(locked['status'], 'locked')
-        self.assertEqual(locked['locked_by'][0]['code'], 'SK-U01-L02-C01')
+        skill = l2_skills['SK-U01-L02-O01']
+        self.assertEqual(skill['status'], 'available')
+        self.assertEqual(skill['locked_by'], [])
+        self.assertEqual(skill['missing_prerequisites'][0]['code'], 'SK-U01-L02-C01')
+
+    def test_wrong_answer_does_not_block_then_review_at_end_of_round(self):
+        self.client.force_authenticate(self.student)
+        skill = self.s_concept
+        p1 = skill.chunks.get(code__endswith='-P1')
+        p2 = skill.chunks.get(code__endswith='-P2')
+        nxt = lambda: self.client.get(self.url('student-next-action'), {'skill': skill.id}).data
+
+        nxt(), nxt()  # règle, exemple
+        step = nxt()
+        self.assertEqual((step['mode'], step['chunk']['id']), ('practice', p1.id))
+        self.assertEqual(step['round']['remaining'], 2)
+
+        # Erreur sur P1 : feedback "incorrect" mais on passe à P2.
+        data = self.answer(p1, '1/7').data
+        self.assertFalse(data['is_correct'])
+        self.assertTrue(data['feedback']['review_later'])
+        self.assertTrue(data['feedback']['short_message'])
+        self.assertEqual(data['round']['phase'], 'practice')
+        step = nxt()
+        self.assertEqual((step['mode'], step['chunk']['id']), ('practice', p2.id))
+
+        # Fin de la série : retour sur P1 avec le feedback de l'erreur.
+        self.answer(p2, '7/9')
+        step = nxt()
+        self.assertEqual(step['mode'], 'review')
+        self.assertEqual(step['chunk']['id'], p1.id)
+        self.assertEqual(step['review']['feedback']['category'], 'concept')
+        self.assertEqual(step['review']['feedback']['rule'], 'قاعدة')
+
+        # P1 corrigé : la série est terminée, une nouvelle commence.
+        data = self.answer(p1, '5/7').data
+        self.assertIsNone(data['round']['phase'])
+        step = nxt()
+        self.assertEqual(step['mode'], 'practice')
+        self.assertEqual(step['round']['to_review'], 0)
+
+    def test_review_never_loops_forever_on_same_exercise(self):
+        self.client.force_authenticate(self.student)
+        skill = self.s_concept
+        p1 = skill.chunks.get(code__endswith='-P1')
+        p2 = skill.chunks.get(code__endswith='-P2')
+        nxt = lambda: self.client.get(self.url('student-next-action'), {'skill': skill.id}).data
+        nxt(), nxt(), nxt()
+        self.answer(p1, 'x')
+        self.answer(p2, '7/9')
+        for _ in range(2):
+            step = nxt()
+            self.assertEqual((step['mode'], step['chunk']['id']), ('review', p1.id))
+            self.answer(p1, 'x')
+        self.assertEqual(nxt()['mode'], 'practice')
 
     def test_student_cannot_read_another_student_path(self):
         other = make_user('mariem', User.Role.STUDENT)

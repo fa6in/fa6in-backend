@@ -275,3 +275,55 @@ class Goal(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean(exclude=None, validate_unique=False)
         super().save(*args, **kwargs)
+
+
+class AcademicYear(models.Model):
+    """
+    Année scolaire : sa date de début sert à calculer la semaine courante
+    du programme. Les leçons s'ouvrent pour l'étudiant selon leur semaine
+    (Lesson.week / programme_weeks), pas selon la fin de la leçon précédente.
+    """
+    name = models.CharField(_('السنة الدراسية'), max_length=50, db_comment="Ex: '2026-2027'")
+    start_date = models.DateField(
+        _('تاريخ بداية السنة'),
+        db_comment="Premier jour de la semaine 1 du programme",
+    )
+    is_current = models.BooleanField(_('السنة الحالية'), default=False)
+
+    class Meta:
+        verbose_name = _('سنة دراسية (تقويم)')
+        verbose_name_plural = _('السنوات الدراسية (تقويم)')
+        ordering = ['-start_date']
+        db_table_comment = "Calendrier scolaire : date de début de la semaine 1"
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        # Une seule année courante à la fois.
+        if self.is_current:
+            AcademicYear.objects.exclude(pk=self.pk).filter(is_current=True).update(is_current=False)
+        super().save(*args, **kwargs)
+
+    def week_of(self, day):
+        """Numéro de semaine du programme (1 = première semaine) pour `day`."""
+        return max(0, (day - self.start_date).days // 7 + 1)
+
+    @classmethod
+    def current_week(cls, day=None):
+        """
+        Semaine courante du programme, ou None si aucun calendrier n'est
+        configuré (dans ce cas aucune leçon n'est verrouillée par la semaine).
+        Priorité : AcademicYear courante, sinon settings.SCHOOL_YEAR_START.
+        """
+        from datetime import date
+        from django.utils import timezone
+
+        day = day or timezone.localdate()
+        year = cls.objects.filter(is_current=True).first()
+        if year is not None:
+            return year.week_of(day)
+        start = getattr(settings, 'SCHOOL_YEAR_START', None)
+        if start:
+            return cls(start_date=date.fromisoformat(str(start))).week_of(day)
+        return None

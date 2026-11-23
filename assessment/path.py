@@ -3,27 +3,29 @@ assessment/path.py
 
 Parcours de l'étudiant (écrans S1 "الرئيسية", S2 "مساري" et S3 "خريطة
 المهارات" du design) : calcule, pour un étudiant et une matière, l'état de
-chaque unité / leçon / skill à partir de StudentProgress et Prerequisite.
+chaque unité / leçon / skill à partir de StudentProgress et du calendrier.
 
-Règles de verrouillage (progression par maîtrise) :
-- Une unité est ouverte si l'unité publiée précédente de la même matière
-  est terminée ("تُفتح بعد إتمام U01").
-- Une leçon est ouverte si son unité est ouverte et que la leçon publiée
-  précédente de l'unité est terminée.
-- Une skill est verrouillée si sa leçon est fermée, ou si l'un de ses
-  prérequis appartenant à la même unité n'est pas encore maîtrisé
-  ("يتطلب: جمع المتشابهة"). Les prérequis hors unité ne verrouillent pas :
-  c'est le Decision Engine qui y redirige l'étudiant s'il bloque
+Règles d'ouverture (progression par SEMAINE du programme) :
+- Une leçon est ouverte dès que sa semaine (Lesson.week, sinon la plus
+  petite de Lesson.programme_weeks) est atteinte : semaine <= semaine
+  courante (AcademicYear.current_week). Elle n'attend PAS la fin de la
+  leçon précédente : deux leçons de la même semaine, même dans deux
+  unités différentes, sont ouvertes en même temps.
+- Une leçon sans semaine renseignée, ou l'absence de calendrier configuré,
+  ne verrouille rien.
+- Une unité est ouverte dès qu'au moins une de ses leçons est ouverte.
+- Toutes les skills d'une leçon ouverte sont ouvertes. Les prérequis non
+  maîtrisés sont seulement signalés (missing_prerequisites) : c'est le
+  Decision Engine qui y redirige l'étudiant s'il bloque
   (engine.find_prerequisite_redirect).
-- "Terminée" = toutes les skills maîtrisées. Une leçon sans skill est
-  considérée terminée pour ne pas bloquer le parcours.
+- "Terminée" = toutes les skills maîtrisées.
 """
 
 from collections import defaultdict
 
 from django.db.models import Q
 
-from curriculum.models import Goal, Lesson, Subject
+from curriculum.models import AcademicYear, Goal, Lesson, Subject
 from skills.models import Prerequisite, Skill
 from users.models import StudentProfile
 from .models import StudentProgress
@@ -55,7 +57,35 @@ def _skill_sort_key(skill):
     )
 
 
-def build_subject_path(student, subject):
+def lesson_week(lesson):
+    """Semaine d'ouverture d'une leçon (None si non renseignée)."""
+    if lesson.week:
+        return lesson.week
+    weeks = []
+    for w in lesson.programme_weeks or []:
+        try:
+            weeks.append(int(w))
+        except (TypeError, ValueError):
+            continue
+    return min(weeks) if weeks else None
+
+
+def lesson_is_open(lesson, current_week):
+    week = lesson_week(lesson)
+    return current_week is None or week is None or week <= current_week
+
+
+def skill_is_open(skill, current_week=None):
+    """Vrai si la leçon de la skill est ouverte à la semaine courante."""
+    if current_week is None:
+        current_week = AcademicYear.current_week()
+    return lesson_is_open(skill.goal.lesson, current_week)
+
+
+_UNSET = object()
+
+
+def build_subject_path(student, subject, current_week=_UNSET):
     """
     Retourne la structure complète du parcours d'une matière :
 
@@ -63,13 +93,16 @@ def build_subject_path(student, subject):
       'subject': Subject,
       'units': [{
           'unit': Unit, 'status': 'done'|'in_progress'|'available'|'locked',
-          'locked_by_unit': Unit|None, 'skills_total', 'skills_mastered',
+          'locked_by_unit': None (conservé pour compatibilité),
+          'week', 'next_opening_week', 'skills_total', 'skills_mastered',
           'lessons': [{
-              'lesson': Lesson, 'status': 'done'|'current'|'locked',
+              'lesson': Lesson, 'status': 'done'|'current'|'locked', 'week', 'is_open',
               'skills_total', 'skills_mastered',
-              'skills': [{'skill', 'progress', 'status', 'locked_by': [Skill]}],
+              'skills': [{'skill', 'progress', 'status', 'locked_by': [],
+                          'missing_prerequisites': [Skill]}],
           }],
       }],
+      'current_week': int|None,
     }
 
     Statut d'une skill : 'mastered' | 'in_progress' | 'available' | 'locked'.
@@ -78,6 +111,8 @@ def build_subject_path(student, subject):
     lessons = list(
         Lesson.objects.filter(unit__in=units, is_published=True).order_by('order_index', 'id')
     )
+    if current_week is _UNSET:
+        current_week = AcademicYear.current_week()
     skills = list(
         Skill.objects.filter(goal__lesson__in=lessons).select_related('goal', 'goal__lesson')
     )
@@ -97,37 +132,32 @@ def build_subject_path(student, subject):
     skills_by_lesson = defaultdict(list)
     for skill in sorted(skills, key=_skill_sort_key):
         skills_by_lesson[skill.goal.lesson_id].append(skill)
-    unit_of_skill = {s.id: s.goal.lesson.unit_id for s in skills}
 
     def is_mastered(skill_id):
         p = progress_by_skill.get(skill_id)
         return bool(p and p.status == MASTERED)
 
     path_units = []
-    previous_unit_done, previous_unit = True, None
     for unit in units:
-        unit_open = previous_unit_done
         unit_lessons = []
-        previous_lesson_done = True
         for lesson in lessons_by_unit[unit.id]:
-            lesson_open = unit_open and previous_lesson_done
+            week = lesson_week(lesson)
+            lesson_open = lesson_is_open(lesson, current_week)
             lesson_skills = []
             for skill in skills_by_lesson[lesson.id]:
                 progress = progress_by_skill.get(skill.id)
-                locked_by = [
-                    pre for pre in prereqs_by_skill[skill.id]
-                    if unit_of_skill.get(pre.id) == unit.id and not is_mastered(pre.id)
-                ]
+                missing = [pre for pre in prereqs_by_skill[skill.id] if not is_mastered(pre.id)]
                 if progress and progress.status == MASTERED:
                     status = 'mastered'
-                elif not lesson_open or locked_by:
+                elif not lesson_open:
                     status = 'locked'
                 elif progress and progress.attempts > 0:
                     status = 'in_progress'
                 else:
                     status = 'available'
                 lesson_skills.append({
-                    'skill': skill, 'progress': progress, 'status': status, 'locked_by': locked_by,
+                    'skill': skill, 'progress': progress, 'status': status,
+                    'locked_by': [], 'missing_prerequisites': missing,
                 })
 
             mastered = sum(1 for s in lesson_skills if s['status'] == 'mastered')
@@ -141,11 +171,12 @@ def build_subject_path(student, subject):
             unit_lessons.append({
                 'lesson': lesson, 'status': lesson_status, 'skills': lesson_skills,
                 'skills_total': len(lesson_skills), 'skills_mastered': mastered,
+                'week': week, 'is_open': lesson_open,
             })
-            previous_lesson_done = previous_lesson_done and lesson_done
 
         total = sum(l['skills_total'] for l in unit_lessons)
         mastered = sum(l['skills_mastered'] for l in unit_lessons)
+        unit_open = not unit_lessons or any(l['is_open'] for l in unit_lessons)
         unit_done = bool(unit_lessons) and all(l['status'] == 'done' for l in unit_lessons)
         started = any(
             s['progress'] and s['progress'].attempts > 0
@@ -160,15 +191,17 @@ def build_subject_path(student, subject):
         else:
             unit_status = 'available'
 
+        weeks = [l['week'] for l in unit_lessons if l['week'] is not None]
+        locked_weeks = [l['week'] for l in unit_lessons if not l['is_open'] and l['week'] is not None]
         path_units.append({
             'unit': unit, 'status': unit_status, 'lessons': unit_lessons,
-            'locked_by_unit': previous_unit if not unit_open else None,
+            'locked_by_unit': None,
+            'week': min(weeks) if weeks else None,
+            'next_opening_week': min(locked_weeks) if locked_weeks else None,
             'skills_total': total, 'skills_mastered': mastered,
         })
-        previous_unit_done = previous_unit_done and unit_done
-        previous_unit = unit
 
-    return {'subject': subject, 'units': path_units}
+    return {'subject': subject, 'units': path_units, 'current_week': current_week}
 
 
 def iter_skills(path):
@@ -210,6 +243,9 @@ def serialize_skill_entry(entry):
         'attempts': progress.attempts if progress else 0,
         'mastery_threshold': skill.mastery_threshold,
         'locked_by': [{'id': s.id, 'code': s.code, 'name': s.name} for s in entry['locked_by']],
+        'missing_prerequisites': [
+            {'id': s.id, 'code': s.code, 'name': s.name} for s in entry.get('missing_prerequisites', [])
+        ],
     }
 
 
@@ -226,6 +262,8 @@ def serialize_path(path):
             'central_question': unit.central_question,
             'thumbnail': unit.thumbnail.url if unit.thumbnail else None,
             'status': u['status'],
+            'week': u['week'],
+            'next_opening_week': u['next_opening_week'],
             'skills_total': u['skills_total'],
             'skills_mastered': u['skills_mastered'],
             'progress': round(u['skills_mastered'] / u['skills_total'], 2) if u['skills_total'] else 0.0,
@@ -239,6 +277,7 @@ def serialize_path(path):
                     'code': l['lesson'].code,
                     'title': l['lesson'].title,
                     'status': l['status'],
+                    'week': l['week'],
                     'skills_total': l['skills_total'],
                     'skills_mastered': l['skills_mastered'],
                 }
@@ -251,6 +290,7 @@ def serialize_path(path):
             'level_name': subject.level.name,
         },
         'units': units,
+        'current_week': path.get('current_week'),
     }
 
 
