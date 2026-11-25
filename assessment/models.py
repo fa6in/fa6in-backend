@@ -100,16 +100,21 @@ class StudentProgress(models.Model):
         _('نوع آخر خطأ'), max_length=20, choices=ErrorCategory.choices,
         null=True, blank=True,
     )
-    # Série d'exercices en cours ("round") : l'étudiant enchaîne tous les
-    # exercices de la série même s'il se trompe ; les exercices ratés sont
-    # repris à la fin de la série avec leur feedback (engine.record_round_answer).
-    round_queue = models.JSONField(
-        _('تمارين السلسلة المتبقية'), default=list, blank=True,
-        db_comment="IDs des chunks 'practice' restant à faire dans la série en cours (ordre d'affichage)",
+    # État du moteur (Evaluation & Decision Engine MVP) pour ce couple
+    # (étudiant, skill) : groupe d'exercices en cours, intervention en
+    # cours, début du cycle d'apprentissage (un exercice n'est jamais
+    # reproposé pendant un même cycle).
+    cycle_started_at = models.DateTimeField(
+        _('بداية دورة التعلم'), null=True, blank=True,
+        db_comment="Début du cycle d'apprentissage courant de la skill",
     )
-    round_mistakes = models.JSONField(
-        _('أخطاء السلسلة'), default=list, blank=True,
-        db_comment="Exercices ratés à reprendre en fin de série : [{chunk_id, error_type, retries}]",
+    active_group = models.ForeignKey(
+        'ExerciseGroup', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+', verbose_name=_('مجموعة التمارين الحالية'),
+    )
+    active_intervention = models.ForeignKey(
+        'Intervention', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+', verbose_name=_('التدخل الحالي'),
     )
     status = models.CharField(_('الحالة'), max_length=20, choices=Status.choices, default=Status.NOT_STARTED)
     started_at = models.DateTimeField(_('تاريخ البدء'), null=True, blank=True)
@@ -129,17 +134,13 @@ class StudentProgress(models.Model):
 
     def register_attempt(self, is_correct: bool, error_category: str = None):
         """
-        Applique les règles métier du document (Partie 4.3, Règles 6 et 7) :
+        Enregistre une tentative : compteurs, série de réponses correctes
+        (Correct Streak) et dernier type d'erreur.
 
-        Règle 6 - Calcul du mastery :
-          - Si attempts < 3 : mastery = 0.00 (non fiable)
-          - Si attempts >= 3 : mastery = correct_count / attempts
-
-        Règle 7 - Status :
-          - not_started : attempts = 0
-          - in_progress : attempts > 0 et mastery < mastery_threshold
-          - mastered : mastery >= mastery_threshold ET
-                       consecutive_correct >= required_consecutive_correct
+        Le mastery et le statut 'mastered' ne sont PLUS calculés ici : selon
+        le guide MVP (section 3), le mastery se calcule sur la DERNIÈRE
+        mise en œuvre d'un groupe d'exercices uniquement, et la maîtrise
+        est déclarée par le Decision Engine (assessment/decision.py).
         """
         if self.attempts == 0:
             self.started_at = timezone.now()
@@ -154,18 +155,7 @@ class StudentProgress(models.Model):
             self.consecutive_correct = 0
             self.last_error_type = error_category
 
-        self.mastery = round(self.correct_count / self.attempts, 2) if self.attempts >= 3 else 0.00
-
-        threshold = float(self.skill.mastery_threshold)
-        required_consecutive = self.skill.required_consecutive_correct
-
-        if self.attempts == 0:
-            self.status = self.Status.NOT_STARTED
-        elif float(self.mastery) >= threshold and self.consecutive_correct >= required_consecutive:
-            if self.status != self.Status.MASTERED:
-                self.mastered_at = timezone.now()
-            self.status = self.Status.MASTERED
-        else:
+        if self.status == self.Status.NOT_STARTED:
             self.status = self.Status.IN_PROGRESS
 
         self.save()
@@ -213,6 +203,22 @@ class LogAnswer(models.Model):
         related_name='occurrences',
         db_comment="Détail de l'erreur",
     )
+    selected_option = models.CharField(
+        _('الاختيار المقدم'), max_length=100, blank=True, default='',
+        db_comment="Identifiant de l'option choisie (QCM riche), si reconnue",
+    )
+    error_source = models.CharField(
+        _('مصدر تصنيف الخطأ'), max_length=20, blank=True, default='',
+        db_comment="option (Error Mapping du choix) / chunk (catégorie par défaut de l'exercice) / heuristic",
+    )
+    exercise_group = models.ForeignKey(
+        'ExerciseGroup', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='answers', verbose_name=_('مجموعة التمارين'),
+    )
+    intervention = models.ForeignKey(
+        'Intervention', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='answers', verbose_name=_('التدخل'),
+    )
     time_taken = models.IntegerField(_('الوقت المستغرق بالثواني'), null=True, blank=True)
     timestamp = models.DateTimeField(_('التاريخ والوقت'), auto_now_add=True)
 
@@ -243,3 +249,274 @@ class LogAnswer(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError(_("log_answers est append-only : la suppression est interdite."))
+
+
+# ---------------------------------------------------------------------------
+# Evaluation & Decision-Making Engine - MVP
+# (FATIN_Evaluation_Decision_Making_Engine_MVP.docx)
+# ---------------------------------------------------------------------------
+
+class MasteryLevel(models.TextChoices):
+    LOW = 'low', _('منخفض')
+    MEDIUM = 'medium', _('متوسط')
+    HIGH = 'high', _('مرتفع')
+
+
+class Decision(models.TextChoices):
+    CONTINUE = 'continue', _('متابعة التمارين')
+    INTERVENTION = 'intervention', _('تدخل تعليمي')
+    VERIFY_STREAK = 'verify_streak', _('التحقق من استقرار الإتقان')
+    MASTERED = 'mastered', _('إعلان الإتقان')
+    PREREQUISITE_RETURN = 'prerequisite_return', _('العودة إلى مهارة سابقة')
+    TEACHER_REVIEW = 'teacher_review', _('إحالة إلى المعلم')
+
+
+class EngineSettings(models.Model):
+    """
+    Section 11 du guide : les valeurs numériques ne sont pas codées en dur,
+    elles sont modifiables ici (ligne unique, pk=1).
+    """
+    low_threshold = models.DecimalField(
+        _('حد المستوى المنخفض'), max_digits=3, decimal_places=2, default=0.50,
+        help_text=_('Low < low_threshold <= Medium'),
+    )
+    high_threshold = models.DecimalField(
+        _('حد المستوى المرتفع'), max_digits=3, decimal_places=2, default=0.80,
+        help_text=_('Medium < high_threshold <= High (aussi le mastery requis)'),
+    )
+    required_correct_streak = models.PositiveSmallIntegerField(
+        _('عدد الإجابات الصحيحة المتتالية المطلوبة'), default=3,
+    )
+    min_attempts = models.PositiveSmallIntegerField(
+        _('الحد الأدنى للمحاولات قبل الحكم على الإتقان'), default=4,
+    )
+    group_size = models.PositiveSmallIntegerField(
+        _('عدد التمارين في المجموعة'), default=5,
+        help_text=_("Nombre d'exercices d'un groupe d'évaluation (>= min_attempts)"),
+    )
+    updated_at = models.DateTimeField(_('تاريخ التحديث'), auto_now=True)
+
+    class Meta:
+        verbose_name = _('إعدادات محرك التقييم')
+        verbose_name_plural = _('إعدادات محرك التقييم')
+
+    def __str__(self):
+        return str(_('إعدادات محرك التقييم'))
+
+    def clean(self):
+        if not (0 < self.low_threshold < self.high_threshold <= 1):
+            raise ValidationError(_("Il faut 0 < low_threshold < high_threshold <= 1."))
+        if self.group_size < self.min_attempts:
+            raise ValidationError({'group_size': _("group_size doit être >= min_attempts.")})
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, created = cls.objects.get_or_create(pk=1)
+        if created:
+            obj.refresh_from_db()  # valeurs Decimal (et non float) pour les comparaisons
+        return obj
+
+
+class ExerciseGroup(models.Model):
+    """
+    Groupe d'exercices présenté à l'étudiant puis évalué en bloc
+    (Exercise Group ID du Learning Trace). Les résultats de l'évaluation
+    sont stockés sur le groupe.
+    """
+
+    class Status(models.TextChoices):
+        IN_PROGRESS = 'in_progress', _('قيد الإنجاز')
+        VERIFYING = 'verifying', _('التحقق من الإتقان')
+        COMPLETED = 'completed', _('مكتملة')
+
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='exercise_groups', verbose_name=_('الطالب'),
+    )
+    skill = models.ForeignKey(
+        Skill, on_delete=models.CASCADE, related_name='exercise_groups', verbose_name=_('المهارة'),
+    )
+    exercise_ids = models.JSONField(_('التمارين'), default=list, db_comment="IDs des chunks 'practice' du groupe, dans l'ordre")
+    status = models.CharField(_('الحالة'), max_length=20, choices=Status.choices, default=Status.IN_PROGRESS)
+
+    total_attempts = models.PositiveIntegerField(_('عدد المحاولات'), default=0)
+    correct_answers = models.PositiveIntegerField(_('عدد الإجابات الصحيحة'), default=0)
+    mastery = models.DecimalField(_('نسبة الإتقان'), max_digits=3, decimal_places=2, null=True, blank=True)
+    mastery_level = models.CharField(_('مستوى الإتقان'), max_length=10, choices=MasteryLevel.choices, blank=True, default='')
+    error_frequency = models.JSONField(_('تكرار أنواع الأخطاء'), default=dict, blank=True)
+    dominant_error_type = models.CharField(
+        _('نوع الخطأ الغالب'), max_length=20, choices=ErrorCategory.choices, blank=True, default='',
+    )
+    correct_streak = models.PositiveIntegerField(_('الإجابات الصحيحة المتتالية'), default=0)
+    judged = models.BooleanField(
+        _('حكم موثوق'), default=False,
+        db_comment="True si le groupe atteint le minimum de tentatives (section 3.2)",
+    )
+    decision = models.CharField(_('القرار'), max_length=30, choices=Decision.choices, blank=True, default='')
+
+    created_at = models.DateTimeField(_('تاريخ الإنشاء'), auto_now_add=True)
+    evaluated_at = models.DateTimeField(_('تاريخ التقييم'), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _('مجموعة تمارين')
+        verbose_name_plural = _('مجموعات التمارين')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"G{self.pk} {self.student} / {self.skill.code}"
+
+
+class Intervention(models.Model):
+    """
+    Séquence d'intervention pédagogique (section 6) : séquence fixe de
+    pas selon le type d'erreur dominant. La réévaluation n'a lieu
+    qu'une fois la séquence complètement terminée (section 7).
+    """
+
+    class Status(models.TextChoices):
+        IN_PROGRESS = 'in_progress', _('قيد التنفيذ')
+        COMPLETED = 'completed', _('مكتمل')
+        CANCELLED = 'cancelled', _('ملغى')
+
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='interventions', verbose_name=_('الطالب'),
+    )
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name='interventions', verbose_name=_('المهارة'))
+    group = models.ForeignKey(
+        ExerciseGroup, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='interventions', verbose_name=_('مجموعة التقييم'),
+    )
+    error_type = models.CharField(_('نوع الخطأ المستهدف'), max_length=20, choices=ErrorCategory.choices)
+    mastery_level = models.CharField(_('مستوى الإتقان'), max_length=10, choices=MasteryLevel.choices)
+    sequence = models.JSONField(
+        _('تسلسل الإجراءات'), default=list,
+        db_comment="[{step, kind: content|exercise, chunk_id, instruction, status}]",
+    )
+    current_step = models.PositiveSmallIntegerField(_('الخطوة الحالية'), default=0)
+    status = models.CharField(_('الحالة'), max_length=20, choices=Status.choices, default=Status.IN_PROGRESS)
+    created_at = models.DateTimeField(_('تاريخ الإنشاء'), auto_now_add=True)
+    completed_at = models.DateTimeField(_('تاريخ الانتهاء'), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _('تدخل تعليمي')
+        verbose_name_plural = _('التدخلات التعليمية')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"I{self.pk} {self.error_type} / {self.skill.code}"
+
+
+class LearningTrace(models.Model):
+    """
+    Student Learning Trace (section 9) : une ligne par cycle
+    évaluation -> décision -> intervention, complétée par la réévaluation
+    suivante (mastery_after, error_type_after). Historique : jamais supprimé.
+    """
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='learning_traces', verbose_name=_('الطالب'),
+    )
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name='learning_traces', verbose_name=_('المهارة'))
+    exercise_group = models.OneToOneField(
+        ExerciseGroup, on_delete=models.CASCADE, related_name='trace', verbose_name=_('مجموعة التمارين'),
+    )
+    evaluation_date = models.DateTimeField(_('تاريخ التقييم'))
+    total_attempts = models.PositiveIntegerField(_('عدد المحاولات'))
+    correct_answers = models.PositiveIntegerField(_('عدد الإجابات الصحيحة'))
+    mastery_before = models.DecimalField(_('الإتقان قبل التدخل'), max_digits=3, decimal_places=2)
+    mastery_level = models.CharField(_('مستوى الإتقان'), max_length=10, choices=MasteryLevel.choices)
+    error_frequency = models.JSONField(_('تكرار أنواع الأخطاء'), default=dict)
+    dominant_error_type = models.CharField(
+        _('نوع الخطأ الغالب'), max_length=20, choices=ErrorCategory.choices, blank=True, default='',
+    )
+    decision = models.CharField(_('القرار'), max_length=30, choices=Decision.choices)
+    intervention = models.ForeignKey(
+        Intervention, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='traces', verbose_name=_('التدخل'),
+    )
+    intervention_sequence = models.JSONField(_('تسلسل التدخل'), default=list, blank=True)
+    intervention_status = models.CharField(_('حالة التدخل'), max_length=20, blank=True, default='')
+    mastery_after = models.DecimalField(_('الإتقان بعد التدخل'), max_digits=3, decimal_places=2, null=True, blank=True)
+    error_type_after = models.CharField(
+        _('نوع الخطأ الغالب بعد التدخل'), max_length=20, choices=ErrorCategory.choices, blank=True, default='',
+    )
+    evaluation_after_date = models.DateTimeField(_('تاريخ التقييم اللاحق'), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _('سجل تعلم')
+        verbose_name_plural = _('سجل تعلم التلميذ')
+        ordering = ['-evaluation_date']
+
+    def __str__(self):
+        return f"{self.student} / {self.skill.code} / {self.evaluation_date:%Y-%m-%d}"
+
+    @property
+    def mastery_improvement(self):
+        if self.mastery_after is None:
+            return None
+        return round(float(self.mastery_after) - float(self.mastery_before), 2)
+
+
+class PrerequisiteReturn(models.Model):
+    """
+    Section 8 : retour vers une skill préalable, ou cas sans prérequis
+    adapté, enregistré pour revue par l'enseignant / l'administrateur.
+    """
+
+    class Status(models.TextChoices):
+        ACTIVE = 'active', _('قيد المعالجة')
+        COMPLETED = 'completed', _('مكتملة')
+        TEACHER_REVIEW = 'teacher_review', _('بانتظار مراجعة المعلم')
+        REVIEWED = 'reviewed', _('تمت المراجعة')
+
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='prerequisite_returns', verbose_name=_('الطالب'),
+    )
+    from_skill = models.ForeignKey(
+        Skill, on_delete=models.CASCADE, related_name='returns_from', verbose_name=_('المهارة الحالية'),
+    )
+    to_skill = models.ForeignKey(
+        Skill, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='returns_to', verbose_name=_('المهارة السابقة'),
+    )
+    exercise_group = models.ForeignKey(
+        ExerciseGroup, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='prerequisite_returns', verbose_name=_('مجموعة التقييم'),
+    )
+    status = models.CharField(_('الحالة'), max_length=20, choices=Status.choices)
+    reason = models.TextField(_('سبب القرار'))
+    dominant_error_type = models.CharField(
+        _('نوع الخطأ الغالب'), max_length=20, choices=ErrorCategory.choices, blank=True, default='',
+    )
+    skill_mastery_before = models.DecimalField(_('إتقان المهارة قبل العودة'), max_digits=3, decimal_places=2, null=True)
+    prerequisite_mastery_before = models.DecimalField(
+        _('إتقان المهارة السابقة قبل العودة'), max_digits=3, decimal_places=2, null=True, blank=True,
+    )
+    prerequisite_mastery_after = models.DecimalField(
+        _('إتقان المهارة السابقة بعد العودة'), max_digits=3, decimal_places=2, null=True, blank=True,
+    )
+    skill_mastery_after = models.DecimalField(
+        _('إتقان المهارة بعد العودة'), max_digits=3, decimal_places=2, null=True, blank=True,
+    )
+    review_note = models.TextField(_('ملاحظة المراجعة'), blank=True, default='')
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+', verbose_name=_('راجعه'),
+    )
+    created_at = models.DateTimeField(_('تاريخ الإنشاء'), auto_now_add=True)
+    resolved_at = models.DateTimeField(_('تاريخ الإغلاق'), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _('عودة إلى مهارة سابقة')
+        verbose_name_plural = _('العودة إلى المهارات السابقة')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        target = self.to_skill.code if self.to_skill else '—'
+        return f"{self.student} : {self.from_skill.code} -> {target} ({self.status})"

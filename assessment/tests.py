@@ -7,14 +7,17 @@ Scénario du design FATIN côté étudiant (S1 → S8) et côté enseignant
 - Parcours : les leçons s'ouvrent selon leur semaine du programme (deux
   leçons de la même semaine, même dans deux unités, sont ouvertes en même
   temps) ; un prérequis non maîtrisé est signalé mais ne verrouille pas.
-- Séance : règle → exemple → série d'exercices ; une erreur ne bloque pas,
-  l'exercice raté est repris avec son feedback en fin de série ;
-  redirection vers le prérequis après 3 échecs, puis "أتقنت المهارة".
+- Séance (guide "Evaluation & Decision-Making Engine – MVP") : règle →
+  exemple → groupe d'exercices ; une erreur ne bloque pas ; évaluation en
+  fin de groupe, matrice de décision, interventions par type d'erreur,
+  vérification du streak, retour au prérequis après épuisement des
+  exercices, cas à revoir par l'enseignant, Learning Trace.
 - Publication : liste de contrôle d'une leçon, publication d'unité,
   candidats prérequis avec détection de cycle.
 """
 
 from datetime import timedelta
+from decimal import Decimal
 
 from django.urls import reverse
 from django.utils import timezone
@@ -24,7 +27,8 @@ from rest_framework.test import APITestCase
 from curriculum.models import AcademicYear, Stage, Level, Subject, Unit, Lesson, Goal
 from skills.models import Skill, Prerequisite, Chunk
 from users.models import User, StudentProfile
-from .models import StudentProgress
+from .evaluation import dominant_error_type, evaluate_results
+from .models import EngineSettings, PrerequisiteReturn, StudentProgress
 
 
 def make_user(username, role):
@@ -148,86 +152,12 @@ class FatinFlowTestCase(APITestCase):
         self.assertEqual(skill['locked_by'], [])
         self.assertEqual(skill['missing_prerequisites'][0]['code'], 'SK-U01-L02-C01')
 
-    def test_wrong_answer_does_not_block_then_review_at_end_of_round(self):
-        self.client.force_authenticate(self.student)
-        skill = self.s_concept
-        p1 = skill.chunks.get(code__endswith='-P1')
-        p2 = skill.chunks.get(code__endswith='-P2')
-        nxt = lambda: self.client.get(self.url('student-next-action'), {'skill': skill.id}).data
-
-        nxt(), nxt()  # règle, exemple
-        step = nxt()
-        self.assertEqual((step['mode'], step['chunk']['id']), ('practice', p1.id))
-        self.assertEqual(step['round']['remaining'], 2)
-
-        # Erreur sur P1 : feedback "incorrect" mais on passe à P2.
-        data = self.answer(p1, '1/7').data
-        self.assertFalse(data['is_correct'])
-        self.assertTrue(data['feedback']['review_later'])
-        self.assertTrue(data['feedback']['short_message'])
-        self.assertEqual(data['round']['phase'], 'practice')
-        step = nxt()
-        self.assertEqual((step['mode'], step['chunk']['id']), ('practice', p2.id))
-
-        # Fin de la série : retour sur P1 avec le feedback de l'erreur.
-        self.answer(p2, '7/9')
-        step = nxt()
-        self.assertEqual(step['mode'], 'review')
-        self.assertEqual(step['chunk']['id'], p1.id)
-        self.assertEqual(step['review']['feedback']['category'], 'concept')
-        self.assertEqual(step['review']['feedback']['rule'], 'قاعدة')
-
-        # P1 corrigé : la série est terminée, une nouvelle commence.
-        data = self.answer(p1, '5/7').data
-        self.assertIsNone(data['round']['phase'])
-        step = nxt()
-        self.assertEqual(step['mode'], 'practice')
-        self.assertEqual(step['round']['to_review'], 0)
-
-    def test_review_never_loops_forever_on_same_exercise(self):
-        self.client.force_authenticate(self.student)
-        skill = self.s_concept
-        p1 = skill.chunks.get(code__endswith='-P1')
-        p2 = skill.chunks.get(code__endswith='-P2')
-        nxt = lambda: self.client.get(self.url('student-next-action'), {'skill': skill.id}).data
-        nxt(), nxt(), nxt()
-        self.answer(p1, 'x')
-        self.answer(p2, '7/9')
-        for _ in range(2):
-            step = nxt()
-            self.assertEqual((step['mode'], step['chunk']['id']), ('review', p1.id))
-            self.answer(p1, 'x')
-        self.assertEqual(nxt()['mode'], 'practice')
-
     def test_student_cannot_read_another_student_path(self):
         other = make_user('mariem', User.Role.STUDENT)
         self.client.force_authenticate(other)
         self.assertEqual(self.client.get(self.url('student-path')).status_code, status.HTTP_403_FORBIDDEN)
 
     # ---- S4 → S7 : séance ---------------------------------------------
-
-    def test_session_rule_example_practice_then_mastered_unlocks_next_skill(self):
-        self.client.force_authenticate(self.student)
-        skill = self.s_concept
-
-        types = []
-        for _ in range(3):
-            resp = self.client.get(self.url('student-next-action'), {'skill': skill.id})
-            self.assertEqual(resp.data['action'], 'show_chunk')
-            types.append(resp.data['chunk']['chunk_type'])
-        self.assertEqual(types, ['rule', 'example', 'practice'])
-        self.assertNotIn('correct_answer', resp.data['chunk'])
-        self.assertTrue(resp.data['session']['progress']['rule_seen'])
-        self.assertEqual(resp.data['session']['breadcrumb']['lesson_code'], 'U01-L01')
-
-        p1 = skill.chunks.get(code__endswith='-P1')
-        results = [self.answer(p1, '5/7').data for _ in range(3)]
-        self.assertFalse(results[1]['mastered_now'])
-        last = results[2]
-        self.assertTrue(last['mastered_now'])
-        self.assertEqual(last['progress']['status'], 'mastered')
-        self.assertEqual(last['points'], 3)
-        self.assertEqual(last['next_skill']['code'], 'SK-U01-L01-O01')
 
     def test_wrong_answer_returns_feedback_sheet(self):
         self.client.force_authenticate(self.student)
@@ -240,23 +170,225 @@ class FatinFlowTestCase(APITestCase):
         self.assertEqual(data['feedback']['example'], '1/5 + 2/5 = 3/5')
         self.assertIsNone(data['redirect'])
 
-    def test_three_failures_redirect_to_unmastered_prerequisite_only(self):
-        self.client.force_authenticate(self.student)
-        p1 = self.s_add_diff.chunks.get(code__endswith='-P1')
-        for _ in range(2):
-            self.answer(p1, 'x')
-        data = self.answer(p1, 'x').data
-        self.assertEqual(data['redirect']['skill']['code'], 'SK-U01-L02-C01')
+    # ---- Evaluation & Decision Engine (guide MVP) ---------------------
 
-        nxt = self.client.get(self.url('student-next-action'), {'skill': self.s_add_diff.id}).data
+    def exercises(self, skill, categories, guided=()):
+        """
+        Remplace les exercices de `skill` par des QCM dont le mauvais choix
+        est mappé (Error Mapping) sur la catégorie donnée.
+        """
+        skill.chunks.filter(chunk_type='practice').delete()
+        made = []
+        for i, category in enumerate(categories):
+            made.append(Chunk.objects.create(
+                skill=skill, code=f'{skill.code}-X{i}', chunk_type='practice', content=f'سؤال {i}',
+                correct_answer='صح', difficulty=1, order_index=10 + i, is_guided=i in guided,
+                options=[
+                    {'id': 'a', 'text': 'صح', 'is_correct': True},
+                    {'id': 'b', 'text': 'خطأ', 'is_correct': False,
+                     'error_category': category, 'feedback': f'تغذية راجعة {category}'},
+                ],
+            ))
+        return made
+
+    def nxt(self, skill):
+        return self.client.get(self.url('student-next-action'), {'skill': skill.id}).data
+
+    def play(self, skill, outcomes):
+        """Répond aux exercices servis par next-action (True = juste)."""
+        served, results = [], []
+        for ok in outcomes:
+            step = self.nxt(skill)
+            self.assertIsNotNone(step['chunk'], step)
+            served.append(step['chunk']['id'])
+            results.append(self.answer(Chunk.objects.get(pk=step['chunk']['id']), 'صح' if ok else 'خطأ').data)
+        return served, results
+
+    def start(self, skill):
+        self.client.force_authenticate(self.student)
+        self.assertEqual(self.nxt(skill)['chunk']['chunk_type'], 'rule')
+        self.assertEqual(self.nxt(skill)['chunk']['chunk_type'], 'example')
+
+    def test_evaluation_engine_rules_from_the_guide(self):
+        settings = EngineSettings.load()
+        r = evaluate_results([True] * 6 + [False] * 4, [], settings)
+        self.assertEqual((r.mastery, r.mastery_level), (Decimal('0.60'), 'medium'))
+        self.assertEqual(evaluate_results([True] * 4 + [False] * 6, [], settings).mastery_level, 'low')
+        self.assertFalse(evaluate_results([True, True, True], [], settings).judged)
+
+        # 4.2 / 4.3 : type dominant et égalités (Careless > Procedure > Concept).
+        for concept, procedure, careless, expected in (
+            (2, 4, 1, 'procedure'), (3, 3, 1, 'procedure'), (2, 4, 4, 'careless'),
+            (3, 3, 3, 'careless'), (4, 2, 4, 'careless'), (4, 1, 1, 'concept'),
+        ):
+            freq = {'concept': concept, 'procedure': procedure, 'careless': careless}
+            self.assertEqual(dominant_error_type(freq), expected, freq)
+
+        # 6.4 : C W C C C -> 80 % et streak 3.
+        r = evaluate_results([True, False, True, True, True], ['concept'], settings)
+        self.assertEqual((r.mastery, r.mastery_level, r.correct_streak), (Decimal('0.80'), 'high', 3))
+
+    def test_wrong_answer_does_not_block_then_procedure_intervention_and_new_group(self):
+        skill = self.s_concept
+        made = self.exercises(skill, ['procedural'] * 11, guided={10})
+        self.start(skill)
+
+        # Groupe de 5 : une erreur ne bloque pas, aucune décision en cours de groupe.
+        served, results = self.play(skill, [False, True, False, True, True])
+        self.assertEqual(len(set(served)), 5)
+        self.assertNotIn(made[10].id, served)  # l'exercice guidé est réservé à l'intervention
+        first = results[0]
+        self.assertFalse(first['is_correct'])
+        self.assertEqual(first['error_type'], 'procedure')
+        self.assertEqual(first['error_source'], 'option')
+        self.assertEqual(first['feedback']['message'], 'تغذية راجعة procedural')
+        self.assertTrue(first['feedback']['continue'])
+        self.assertIsNone(first['evaluation'])
+
+        # Fin de groupe : 3/5 = 60 % Medium, Procedure -> intervention.
+        evaluation = results[-1]['evaluation']
+        self.assertEqual(evaluation['mastery'], 0.6)
+        self.assertEqual(evaluation['mastery_level'], 'medium')
+        self.assertEqual(evaluation['dominant_error_type'], 'procedure')
+        self.assertEqual(evaluation['decision'], 'intervention')
+        self.assertEqual(len(evaluation['mistakes']), 2)  # retour sur les erreurs du groupe
+
+        # 6.2 : étapes -> exemple résolu -> exercice guidé -> exercice indépendant.
+        steps = [self.nxt(skill), self.nxt(skill), self.nxt(skill)]
+        self.assertEqual([s['mode'] for s in steps], ['intervention'] * 3)
+        self.assertEqual([s['intervention']['step'] for s in steps],
+                         ['steps_explanation', 'worked_example', 'guided_exercise'])
+        self.assertEqual(steps[2]['chunk']['id'], made[10].id)
+        self.assertTrue(steps[2]['instruction'])
+        self.assertEqual(self.answer(made[10], 'صح').data['answer_context'], 'intervention')
+        independent = self.nxt(skill)
+        self.assertEqual(independent['intervention']['step'], 'independent_exercise')
+        # Pas de réévaluation au milieu de l'intervention (section 7).
+        self.assertIsNone(self.answer(Chunk.objects.get(pk=independent['chunk']['id']), 'خطأ').data['evaluation'])
+
+        # Nouveau groupe, sans jamais reproposer un exercice du cycle (section 10).
+        step = self.nxt(skill)
+        self.assertEqual(step['mode'], 'group')
+        used = set(served) | {made[10].id, independent['chunk']['id']}
+        served2, results2 = self.play(skill, [True] * step['group']['total'])
+        self.assertFalse(used & set(served2))
+
+        # Learning Trace : mastery avant / après l'intervention.
+        trace = self.client.get(self.url('student-learning-trace'), {'skill': skill.id}).data
+        first_eval = trace['evaluations'][-1]
+        self.assertEqual(first_eval['mastery_before'], '0.60')
+        self.assertEqual(first_eval['intervention_status'], 'completed')
+        self.assertEqual(first_eval['mastery_after'], '1.00')
+        self.assertEqual(first_eval['mastery_improvement'], 0.4)
+
+    def test_high_mastery_requires_correct_streak_before_mastered(self):
+        skill = self.s_concept
+        self.exercises(skill, ['concept'] * 8)
+        self.start(skill)
+
+        _served, results = self.play(skill, [True, True, True, False, True])
+        evaluation = results[-1]['evaluation']
+        self.assertEqual((evaluation['mastery_level'], evaluation['correct_streak']), ('high', 1))
+        self.assertEqual(evaluation['decision'], 'verify_streak')
+        self.assertFalse(results[-1]['mastered_now'])
+
+        self.assertEqual(self.nxt(skill)['mode'], 'verify')
+        _served, results = self.play(skill, [True, True])
+        self.assertEqual(results[0]['decision'], 'verify_streak')
+        self.assertTrue(results[1]['mastered_now'])
+        self.assertEqual(results[1]['progress']['status'], 'mastered')
+        self.assertEqual(results[1]['next_skill']['code'], 'SK-U01-L01-O01')
+
+    def test_concept_intervention_sequence(self):
+        skill = self.s_concept
+        Chunk.objects.create(skill=skill, code='SK-R2', chunk_type='rule', content='شرح آخر', order_index=5)
+        self.exercises(skill, ['concept'] * 10)
+        self.start(skill)
+        results = self.play(skill, [False, False, False, True, True])[1]
+        self.assertEqual(results[-1]['evaluation']['intervention']['error_type'], 'concept')
+
+        re_explain = self.nxt(skill)
+        self.assertEqual(re_explain['intervention']['step'], 're_explain')
+        self.assertEqual(re_explain['chunk']['content'], 'شرح آخر')  # explication différente
+        self.assertEqual(self.nxt(skill)['intervention']['step'], 'example')
+        simple = self.nxt(skill)
+        self.assertEqual(simple['intervention']['step'], 'simple_exercise')
+        self.answer(Chunk.objects.get(pk=simple['chunk']['id']), 'صح')
+        self.assertEqual(self.nxt(skill)['intervention']['step'], 'applied_exercise')
+
+    def test_exhausted_exercises_return_to_related_prerequisite(self):
+        skill = self.s_add_diff
+        self.exercises(skill, ['concept'] * 4)
+        self.start(skill)
+        results = self.play(skill, [False] * 4)[1]
+        self.assertEqual(results[-1]['decision'], 'prerequisite_return')
+        self.assertEqual(results[-1]['redirect']['skill']['code'], 'SK-U01-L02-C01')
+
+        nxt = self.nxt(skill)
         self.assertEqual(nxt['action'], 'redirect_to_prerequisite')
         self.assertEqual(nxt['chunk']['chunk_type'], 'rule')
         self.assertEqual(nxt['session']['skill']['code'], 'SK-U01-L02-C01')
 
-        # Une fois le prérequis maîtrisé, plus de redirection en boucle.
+        # Prérequis maîtrisé : retour sur la skill avec un nouveau cycle.
         self.master(self.s_add_same)
-        nxt = self.client.get(self.url('student-next-action'), {'skill': self.s_add_diff.id}).data
-        self.assertEqual(nxt['action'], 'show_chunk')
+        nxt = self.nxt(skill)
+        self.assertEqual((nxt['action'], nxt['mode']), ('show_chunk', 'group'))
+        ret = PrerequisiteReturn.objects.get(from_skill=skill)
+        self.assertEqual(ret.status, PrerequisiteReturn.Status.COMPLETED)
+
+    def test_careless_errors_never_trigger_a_prerequisite_return(self):
+        skill = self.s_add_diff  # a un prérequis non maîtrisé
+        self.exercises(skill, ['careless', 'concept', 'careless', 'concept'])
+        self.start(skill)
+        results = self.play(skill, [False] * 4)[1]
+        evaluation = results[-1]['evaluation']
+        self.assertEqual(evaluation['dominant_error_type'], 'careless')  # égalité 2/2
+        self.assertEqual(evaluation['decision'], 'teacher_review')
+        self.assertTrue(evaluation['teacher_review'])
+        self.assertIsNone(results[-1]['redirect'])
+        step = self.nxt(skill)
+        self.assertEqual((step['mode'], step['intervention']['step']), ('intervention', 'careless_exercise'))
+
+    def test_no_suitable_prerequisite_is_logged_for_teacher_review(self):
+        skill = self.s_concept  # aucun prérequis
+        self.exercises(skill, ['concept'] * 4)
+        self.start(skill)
+        self.play(skill, [False] * 4)
+
+        self.client.force_authenticate(self.teacher)
+        cases = self.client.get(reverse('review-case-list')).data
+        rows = cases['results'] if isinstance(cases, dict) else cases
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['from_skill_code'], skill.code)
+        self.assertIsNone(rows[0]['to_skill'])
+
+        # Un nouvel épuisement ne crée pas de doublon tant que le cas est ouvert.
+        self.client.force_authenticate(self.student)
+        for _ in range(10):  # termine l'intervention (réponses fausses)
+            step = self.nxt(skill)
+            if step['mode'] != 'intervention':
+                break
+            if step['chunk']['chunk_type'] == 'practice':
+                self.answer(Chunk.objects.get(pk=step['chunk']['id']), 'خطأ')
+        self.play(skill, [False] * 4)
+        self.assertEqual(PrerequisiteReturn.objects.filter(from_skill=skill).count(), 1)
+        self.client.force_authenticate(self.teacher)
+
+        resp = self.client.patch(reverse('review-case-detail', kwargs={'pk': rows[0]['id']}),
+                                 {'review_note': 'تمت المتابعة'}, format='json')
+        self.assertEqual(resp.data['status'], 'reviewed')
+        self.assertEqual(resp.data['reviewed_by'], self.teacher.id)
+
+    def test_engine_settings_are_configurable_by_admin_only(self):
+        self.client.force_authenticate(self.teacher)
+        self.assertEqual(self.client.get(reverse('engine-settings')).data['min_attempts'], 4)
+        self.assertEqual(self.client.patch(reverse('engine-settings'), {'group_size': 6}).status_code,
+                         status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(make_user('admin1', User.Role.ADMIN))
+        self.assertEqual(self.client.patch(reverse('engine-settings'), {'group_size': 6}).data['group_size'], 6)
+        resp = self.client.patch(reverse('engine-settings'), {'low_threshold': '0.90'})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     # ---- S1 / S8 -------------------------------------------------------
 

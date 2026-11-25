@@ -7,6 +7,16 @@ from rest_framework import serializers
 from curriculum.serializers import GoalSerializer
 from .models import Skill, Prerequisite, Chunk
 
+_ERROR_CATEGORIES = {
+    'concept': 'concept', 'conceptual': 'concept',
+    'procedure': 'procedure', 'procedural': 'procedure',
+    'careless': 'careless',
+}
+
+
+def normalize_category(value):
+    return _ERROR_CATEGORIES.get(str(value).strip().lower())
+
 
 class SkillMiniSerializer(serializers.ModelSerializer):
     """Version allégée de Skill, pour les FK skill/prerequisite imbriquées."""
@@ -21,7 +31,7 @@ class ChunkSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'skill', 'code', 'chunk_type', 'title', 'content',
             'correct_answer', 'options', 'difficulty', 'order_index',
-            'points', 'time_limit', 'image', 'needs_image', 'image_note',
+            'is_guided', 'default_error_category', 'points', 'time_limit', 'image', 'needs_image', 'image_note',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -44,6 +54,11 @@ class ChunkSerializer(serializers.ModelSerializer):
                 )
             if 'is_correct' in option and not isinstance(option['is_correct'], bool):
                 raise serializers.ValidationError(f"Option {index} : 'is_correct' doit être un booléen.")
+            category = option.get('error_category')
+            if category and not normalize_category(category):
+                raise serializers.ValidationError(
+                    f"Option {index} : error_category doit être concept, procedure ou careless."
+                )
         return value
 
     def validate(self, attrs):
@@ -89,7 +104,15 @@ class PrerequisiteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Prerequisite
-        fields = ['id', 'skill', 'skill_code', 'prerequisite', 'prerequisite_code']
+        fields = ['id', 'skill', 'skill_code', 'prerequisite', 'prerequisite_code', 'related_error_types']
+
+    def validate_related_error_types(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("related_error_types doit être une liste.")
+        normalized = [normalize_category(v) for v in value]
+        if any(v not in ('concept', 'procedure') for v in normalized):
+            raise serializers.ValidationError("Valeurs acceptées : concept, procedure.")
+        return normalized
 
     def validate(self, attrs):
         skill = attrs.get('skill') or getattr(self.instance, 'skill', None)

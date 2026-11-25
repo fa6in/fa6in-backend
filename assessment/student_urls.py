@@ -12,6 +12,7 @@ from .views import (
     StudentPathView,
     StudentSkillMapView,
     StudentProgressSummaryView,
+    StudentLearningTraceView,
 )
 
 urlpatterns = [
@@ -20,5 +21,6 @@ urlpatterns = [
     path('<int:student_id>/home/', StudentHomeView.as_view(), name='student-home'),
     path('<int:student_id>/path/', StudentPathView.as_view(), name='student-path'),
     path('<int:student_id>/skill-map/', StudentSkillMapView.as_view(), name='student-skill-map'),
+    path('<int:student_id>/learning-trace/', StudentLearningTraceView.as_view(), name='student-learning-trace'),
     path('<int:student_id>/progress-summary/', StudentProgressSummaryView.as_view(), name='student-progress-summary'),
 ]

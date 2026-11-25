@@ -1,9 +1,19 @@
 # assessment/urls.py
 
 from django.urls import path
-from .views import ErrorViewSet, StudentProgressViewSet, LogAnswerViewSet, UnitActivitiesView
+from .views import (
+    EngineSettingsView, ErrorViewSet, LogAnswerViewSet, ReviewCaseViewSet, StudentProgressViewSet,
+    UnitActivitiesView,
+)
 
 urlpatterns = [
+    # Evaluation & Decision Engine (guide MVP)
+    path('engine-settings/', EngineSettingsView.as_view(), name='engine-settings'),
+    path('review-cases/', ReviewCaseViewSet.as_view({'get': 'list'}), name='review-case-list'),
+    path('review-cases/<int:pk>/', ReviewCaseViewSet.as_view({
+        'get': 'retrieve', 'patch': 'partial_update',
+    }), name='review-case-detail'),
+
     # Units - Activities
     path('units/<int:unit_id>/activities/', UnitActivitiesView.as_view(), name='unit-activities'),
 

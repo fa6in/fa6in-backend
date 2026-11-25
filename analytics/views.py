@@ -18,7 +18,7 @@ from rest_framework.views import APIView
 
 from django.db.models.functions import TruncDate
 
-from assessment.models import ErrorCategory, LogAnswer, StudentProgress
+from assessment.models import ErrorCategory, LogAnswer, PrerequisiteReturn, StudentProgress
 from curriculum.models import Goal, Lesson, Unit
 from skills.models import Chunk, Skill
 from users.models import User, Wilaya
@@ -100,6 +100,15 @@ def _students_progress_rows(level_id=None):
         .exclude(status=StudentProgress.Status.MASTERED)
         .values('student').annotate(n=Count('id')).values_list('student', 'n')
     )
+    # Retours aux prérequis en cours et cas à revoir par l'enseignant
+    # (Decision Engine, section 8 du guide MVP).
+    for student_id, n in (
+        PrerequisiteReturn.objects.filter(
+            student__in=students,
+            status__in=[PrerequisiteReturn.Status.ACTIVE, PrerequisiteReturn.Status.TEACHER_REVIEW],
+        ).values('student').annotate(n=Count('id')).values_list('student', 'n')
+    ):
+        blocked[student_id] = blocked.get(student_id, 0) + n
     today = timezone.now()
 
     students = students.annotate(

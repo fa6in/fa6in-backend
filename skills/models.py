@@ -112,6 +112,10 @@ class Prerequisite(models.Model):
         related_name='required_for_skills',
         db_comment="Skill prérequise",
     )
+    related_error_types = models.JSONField(
+        _('أنواع الأخطاء المرتبطة'), default=list, blank=True,
+        db_comment="Types d'erreur que ce prérequis peut traiter (concept/procedure). Vide = concept et procedure.",
+    )
 
     class Meta:
         verbose_name = _('متطلب سابق')
@@ -213,6 +217,15 @@ class Chunk(models.Model):
         default=1,
     )
     order_index = models.IntegerField(_('ترتيب العرض المقترح'), default=0)
+    is_guided = models.BooleanField(
+        _('تمرين موجّه'), default=False,
+        db_comment="Exercice où l'élève complète des étapes manquantes (intervention 'procedure')",
+    )
+    default_error_category = models.CharField(
+        _('نوع الخطأ الافتراضي'), max_length=20, blank=True, default='',
+        choices=[('concept', _('خطأ مفاهيمي')), ('procedure', _('خطأ إجرائي')), ('careless', _('خطأ إهمالي'))],
+        db_comment="Error Mapping pour une réponse fausse non couverte par options[].error_category",
+    )
     points = models.IntegerField(_('النقاط'), default=1)
     time_limit = models.IntegerField(_('الحد الزمني بالثواني'), null=True, blank=True)
     image = models.ImageField(
